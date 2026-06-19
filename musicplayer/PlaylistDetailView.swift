@@ -46,7 +46,7 @@ struct PlaylistDetailView: View {
 
     private var header: some View {
         VStack(spacing: 20) {
-            ThumbnailView(url: playlist.coverURL, seed: playlist.tracks.first?.seed ?? 0, cornerRadius: 16)
+            ThumbnailView(url: playlist.coverURL ?? playlist.tracks.first?.thumbnailURL, seed: playlist.tracks.first?.seed ?? 0, cornerRadius: 16)
                 .frame(width: 200, height: 200)
                 .shadow(color: theme.ink.opacity(0.15), radius: 20, y: 10)
             

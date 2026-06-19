@@ -214,7 +214,7 @@ struct NowPlayingView: View {
                     .shadow(color: theme.ink.opacity(0.22), radius: 30, y: 15)
                     .shadow(color: theme.ink.opacity(0.10), radius: 9, y: 3)
             } else {
-                ThumbnailView(url: player.displayCoverURL, seed: player.currentTrack?.seed ?? 0, cornerRadius: 8)
+                ThumbnailView(url: player.displayCoverURL, seed: player.currentTrack?.seed ?? 0, cornerRadius: 8, fullResolution: true)
                     .padding(.horizontal, 28)
                     .padding(.vertical, 14)
                     .shadow(color: theme.ink.opacity(0.22), radius: 30, y: 15)

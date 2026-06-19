@@ -5,12 +5,17 @@ struct ThumbnailView: View {
     let url: String?
     var seed: Int = 0
     var cornerRadius: CGFloat = 6
+    /// Skip downsampling and decode at full resolution. Only the now-playing
+    /// main artwork sets this — everywhere else the image is decoded to the
+    /// size it's actually shown at.
+    var fullResolution: Bool = false
 
     var body: some View {
         GeometryReader { geometry in
             Group {
                 if let urlStr = url, let imageURL = URL(string: urlStr) {
-                    CachedAsyncImage(url: imageURL) { image in
+                    CachedAsyncImage(url: imageURL,
+                                     targetSize: fullResolution ? nil : geometry.size) { image in
                         image
                             .resizable()
                             .scaledToFill()

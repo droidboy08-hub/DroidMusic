@@ -1,35 +1,80 @@
 import SwiftUI
+import UIKit
+import ImageIO
 
 // MARK: - In-memory image cache
 //
-// A process-wide NSCache of decoded UIImages keyed by URL, so the same cover
-// isn't refetched/redecoded every time a row scrolls back on screen or the
-// now-playing sheet reopens. NSCache evicts automatically under memory pressure.
+// A process-wide NSCache of decoded UIImages keyed by URL + target pixel size,
+// so the same cover isn't refetched/redecoded every time a row scrolls back on
+// screen or the now-playing sheet reopens. Keying by size means a cover shown
+// at 44pt and at 200pt each keep their own right-sized bitmap instead of one
+// stomping the other. NSCache evicts automatically under memory pressure.
 enum ImageCache {
-    static let shared: NSCache<NSURL, UIImage> = {
-        let c = NSCache<NSURL, UIImage>()
+    static let shared: NSCache<NSString, UIImage> = {
+        let c = NSCache<NSString, UIImage>()
         c.countLimit = 250
         return c
     }()
 }
 
+// MARK: - ImageIO downsampling
+//
+// Decodes only a thumbnail at `maxPixel`, so a 544²/640² source shown in a 44pt
+// row costs ~a few KB of memory instead of the full decoded bitmap. The decode
+// happens at the target size (kCGImageSourceCreateThumbnailFromImageAlways), so
+// there's no full-size intermediate.
+private func downsampledImage(from data: Data, maxPixel: CGFloat) -> UIImage? {
+    let srcOptions = [kCGImageSourceShouldCache: false] as CFDictionary
+    guard let src = CGImageSourceCreateWithData(data as CFData, srcOptions) else { return nil }
+    let options: [CFString: Any] = [
+        kCGImageSourceCreateThumbnailFromImageAlways: true,
+        kCGImageSourceCreateThumbnailWithTransform: true,
+        kCGImageSourceShouldCacheImmediately: true,
+        kCGImageSourceThumbnailMaxPixelSize: maxPixel
+    ]
+    guard let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, options as CFDictionary) else { return nil }
+    return UIImage(cgImage: cg)
+}
+
 // MARK: - Cached async image view
 //
-// Drop-in replacement for AsyncImage that checks ImageCache first. Mirrors the
-// success/placeholder split the app already uses (procedural art fallback).
+// Drop-in replacement for AsyncImage that checks ImageCache first and, when a
+// `targetSize` is given, downsamples to that size. Pass `targetSize: nil` to
+// keep full resolution (used only for the now-playing main artwork).
 struct CachedAsyncImage<Content: View, Placeholder: View>: View {
     private let url: URL?
+    private let targetSize: CGSize?
     private let content: (Image) -> Content
     private let placeholder: () -> Placeholder
 
+    @Environment(\.displayScale) private var displayScale
     @State private var uiImage: UIImage?
 
     init(url: URL?,
+         targetSize: CGSize? = nil,
          @ViewBuilder content: @escaping (Image) -> Content,
          @ViewBuilder placeholder: @escaping () -> Placeholder) {
         self.url = url
+        self.targetSize = targetSize
         self.content = content
         self.placeholder = placeholder
+    }
+
+    /// Longest edge in pixels to decode to, bucketed to 32px steps so we don't
+    /// cache a near-identical bitmap for every fractional layout size. `nil`
+    /// means "full resolution" (no target requested).
+    private var maxPixelDimension: CGFloat? {
+        guard let targetSize else { return nil }
+        guard targetSize.width > 0, targetSize.height > 0 else { return nil }
+        let scale = displayScale > 0 ? displayScale : 3
+        let raw = max(targetSize.width, targetSize.height) * scale
+        return (raw / 32).rounded(.up) * 32
+    }
+
+    private var cacheKey: NSString {
+        guard let url else { return "" as NSString }
+        if let px = maxPixelDimension { return "\(url.absoluteString)|\(Int(px))" as NSString }
+        return url.absoluteString as NSString
     }
 
     var body: some View {
@@ -40,19 +85,31 @@ struct CachedAsyncImage<Content: View, Placeholder: View>: View {
                 placeholder()
             }
         }
-        .task(id: url) { await load() }
+        .task(id: cacheKey) { await load() }
     }
 
     private func load() async {
         uiImage = nil
         guard let url else { return }
-        let key = url as NSURL
+        // A target size was requested but the view isn't laid out yet — wait for
+        // the next pass rather than fetching a full-size image we'd re-decode.
+        if targetSize != nil, maxPixelDimension == nil { return }
+
+        let key = cacheKey
         if let cached = ImageCache.shared.object(forKey: key) {
             uiImage = cached
             return
         }
-        guard let (data, _) = try? await URLSession.shared.data(from: url),
-              let image = UIImage(data: data) else { return }
+        guard let (data, _) = try? await URLSession.shared.data(from: url) else { return }
+
+        let image: UIImage?
+        if let maxPixel = maxPixelDimension {
+            image = downsampledImage(from: data, maxPixel: maxPixel) ?? UIImage(data: data)
+        } else {
+            image = UIImage(data: data)
+        }
+        guard let image else { return }
+
         ImageCache.shared.setObject(image, forKey: key)
         guard !Task.isCancelled else { return }
         uiImage = image

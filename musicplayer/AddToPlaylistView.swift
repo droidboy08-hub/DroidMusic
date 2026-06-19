@@ -195,7 +195,7 @@ struct AddToPlaylistView: View {
             dismiss()
         } label: {
             HStack(spacing: 12) {
-                ThumbnailView(url: playlist.tracks.first?.thumbnailURL, seed: playlist.tracks.first?.seed ?? 0, cornerRadius: 8)
+                ThumbnailView(url: playlist.coverURL ?? playlist.tracks.first?.thumbnailURL, seed: playlist.tracks.first?.seed ?? 0, cornerRadius: 8)
                     .frame(width: 44, height: 44)
                     .overlay {
                         if playlist.tracks.isEmpty {

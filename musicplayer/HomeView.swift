@@ -204,10 +204,10 @@ struct HomeView: View {
     private func playlistCard(_ playlist: Playlist) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             ZStack {
-                if let firstTrack = playlist.tracks.first {
+                if playlist.coverURL != nil || playlist.tracks.first != nil {
                     ThumbnailView(
-                        url: firstTrack.thumbnailURL,
-                        seed: firstTrack.seed,
+                        url: playlist.coverURL ?? playlist.tracks.first?.thumbnailURL,
+                        seed: playlist.tracks.first?.seed ?? 0,
                         cornerRadius: 12
                     )
                     .frame(width: 148, height: 148)
