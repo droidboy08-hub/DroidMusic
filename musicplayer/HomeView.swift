@@ -14,15 +14,47 @@ struct HomeView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
+            List {
+                // Top sections keep their own internal padding, so they sit as
+                // edge-to-edge, separator-less, transparent rows.
+                Group {
                     header
                     recentlySearched
                     playlistRail
-                    librarySuggestions
-                    Color.clear.frame(height: 110)
+
+                    sectionHeader(title: "From your library", actionTitle: "Library") {
+                        selectTab(.library)
+                    }
+                    .padding(.bottom, 6)
                 }
+                .listRowInsets(EdgeInsets())
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color.clear)
+
+                // The library itself — a real List so rows are cell-reused and
+                // get native separators (and easy swipe actions later).
+                if libraryTracks.isEmpty {
+                    compactEmptyRow(icon: "music.note", text: "Like songs or import a playlist to fill your library.")
+                        .listRowInsets(EdgeInsets())
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color.clear)
+                } else {
+                    ForEach(libraryTracks) { track in
+                        trackRow(track: track)
+                            .listRowInsets(EdgeInsets(top: 0, leading: 22, bottom: 0, trailing: 22))
+                            .listRowBackground(Color.clear)
+                            .listRowSeparatorTint(theme.lineSoft)
+                    }
+                }
+
+                Color.clear
+                    .frame(height: 110)
+                    .listRowInsets(EdgeInsets())
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
             }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
             .scrollIndicators(.hidden)
             .background(theme.palette.bg)
         }
@@ -131,23 +163,21 @@ struct HomeView: View {
         .padding(.bottom, 30)
     }
 
-    private var librarySuggestions: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            sectionHeader(title: "From your library", actionTitle: "Library") {
-                selectTab(.library)
-            }
-
-            if player.likedTracks.isEmpty {
-                compactEmptyRow(icon: "heart", text: "Like songs while listening to build this list.")
-            } else {
-                VStack(spacing: 0) {
-                    ForEach(Array(player.likedTracks.prefix(5).enumerated()), id: \.element.id) { index, track in
-                        trackRow(track: track, isLast: index == min(player.likedTracks.count, 5) - 1)
-                    }
-                }
-                .padding(.horizontal, 22)
+    /// Every song in the user's library — liked songs plus all playlist
+    /// tracks, de-duplicated by videoId (falling back to title+artist) so the
+    /// same song appearing in several places is listed once.
+    private var libraryTracks: [Track] {
+        var seen = Set<String>()
+        var result: [Track] = []
+        func add(_ tracks: [Track]) {
+            for t in tracks {
+                let key = t.videoId ?? "\(t.title)|\(t.artist)".lowercased()
+                if seen.insert(key).inserted { result.append(t) }
             }
         }
+        add(player.likedTracks)
+        for playlist in player.userPlaylists { add(playlist.tracks) }
+        return result
     }
 
     private func sectionTitle(_ title: String) -> some View {
@@ -235,9 +265,9 @@ struct HomeView: View {
         }
     }
 
-    private func trackRow(track: Track, isLast: Bool) -> some View {
+    private func trackRow(track: Track) -> some View {
         Button {
-            player.play(track: track, queue: player.likedTracks)
+            player.play(track: track, queue: libraryTracks)
         } label: {
             HStack(spacing: 12) {
                 ThumbnailView(url: track.thumbnailURL, seed: track.seed, cornerRadius: 8)
@@ -263,9 +293,7 @@ struct HomeView: View {
                 }
             }
             .padding(.vertical, 10)
-            .overlay(alignment: .bottom) {
-                if !isLast { Rectangle().fill(theme.lineSoft).frame(height: 1) }
-            }
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }

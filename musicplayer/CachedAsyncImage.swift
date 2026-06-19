@@ -23,7 +23,9 @@ enum ImageCache {
 // row costs ~a few KB of memory instead of the full decoded bitmap. The decode
 // happens at the target size (kCGImageSourceCreateThumbnailFromImageAlways), so
 // there's no full-size intermediate.
-private func downsampledImage(from data: Data, maxPixel: CGFloat) -> UIImage? {
+// `nonisolated` so it runs on a background executor, never the main actor —
+// decoding during a fast scroll must not block the UI.
+nonisolated private func downsampledImage(from data: Data, maxPixel: CGFloat) -> UIImage? {
     let srcOptions = [kCGImageSourceShouldCache: false] as CFDictionary
     guard let src = CGImageSourceCreateWithData(data as CFData, srcOptions) else { return nil }
     let options: [CFString: Any] = [
@@ -100,18 +102,21 @@ struct CachedAsyncImage<Content: View, Placeholder: View>: View {
             uiImage = cached
             return
         }
-        guard let (data, _) = try? await URLSession.shared.data(from: url) else { return }
 
-        let image: UIImage?
-        if let maxPixel = maxPixelDimension {
-            image = downsampledImage(from: data, maxPixel: maxPixel) ?? UIImage(data: data)
-        } else {
-            image = UIImage(data: data)
-        }
-        guard let image else { return }
+        // Fetch + decode off the main actor so fast scrolling never stalls on
+        // network or image decoding.
+        let image = await fetchAndDecode(url: url, maxPixel: maxPixelDimension)
+        guard let image, !Task.isCancelled else { return }
 
         ImageCache.shared.setObject(image, forKey: key)
-        guard !Task.isCancelled else { return }
         uiImage = image
+    }
+
+    nonisolated private func fetchAndDecode(url: URL, maxPixel: CGFloat?) async -> UIImage? {
+        guard let (data, _) = try? await URLSession.shared.data(from: url) else { return nil }
+        if let maxPixel {
+            return downsampledImage(from: data, maxPixel: maxPixel) ?? UIImage(data: data)
+        }
+        return UIImage(data: data)
     }
 }
