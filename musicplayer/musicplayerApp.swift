@@ -6,6 +6,31 @@ struct AryaMusixApp: App {
     @State private var player = PlayerState()
     @State private var settings = SettingsState()
 
+    init() {
+        // Headless scraper check: launch with `SCRAPER_TEST` to print results.
+        // e.g. xcrun simctl launch --console-pty <udid> DroidMusxc.musicplayer SCRAPER_TEST
+        if CommandLine.arguments.contains("SCRAPER_TEST") {
+            Task { await Self.runScraperTest() }
+        }
+    }
+
+    @MainActor
+    private static func runScraperTest() async {
+        let id = "49wVHQCgjPpN3qzPylIUND"   // 340-track public test playlist
+        print("SCRAPER_TEST ▶︎ scraping \(id)")
+        do {
+            let scraper = SpotifyWebScraper()
+            scraper.debug = true
+            let tracks = try await scraper.scrape(playlistId: id)
+            print("SCRAPER_TEST ✓ got \(tracks.count) tracks")
+            for t in tracks.prefix(10) {
+                print("  • \(t.title) — \(t.artist) (\(Int(t.durationSec))s)")
+            }
+        } catch {
+            print("SCRAPER_TEST ✗ \(error)")
+        }
+    }
+
     var body: some Scene {
         WindowGroup {
             AppRootView(theme: theme, player: player, settings: settings)

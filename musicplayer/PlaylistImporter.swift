@@ -100,14 +100,19 @@ actor PlaylistImporter {
         playlistId: String,
         onProgress: @Sendable @escaping (ImportProgress) -> Void
     ) async throws -> (imported: [TrackMetadata], missed: [String]) {
-        guard
-            let clientId     = Bundle.main.object(forInfoDictionaryKey: "SPOTIFY_CLIENT_ID")     as? String, !clientId.isEmpty,
-            let clientSecret = Bundle.main.object(forInfoDictionaryKey: "SPOTIFY_CLIENT_SECRET") as? String, !clientSecret.isEmpty
-        else { throw ImportError.spotifyCredentialsMissing }
+        await MainActor.run {
+            onProgress(ImportProgress(phase: "Reading Spotify playlist…", current: 0, total: 0))
+        }
 
-        let token      = try await spotifyToken(clientId: clientId, secret: clientSecret)
-        let spotTracks = try await fetchSpotifyTracks(playlistId: playlistId, token: token)
+        // No usable Spotify API anymore (403 / Feb-2026 policy) — scrape the
+        // web player in a hidden WKWebView instead. See SpotifyWebScraper.
+        let scraper    = await SpotifyWebScraper()
+        let spotTracks = try await scraper.scrape(playlistId: playlistId)
         let total      = spotTracks.count
+
+        guard total > 0 else {
+            throw ImportError.network("Couldn't read any tracks. Make sure the Spotify playlist is public.")
+        }
 
         var imported: [TrackMetadata] = []
         var missed:   [String]        = []
@@ -228,61 +233,6 @@ actor PlaylistImporter {
             if token == nil { token = r["continuation"] as? String }
         }
         return token
-    }
-
-    // ── Spotify helpers ───────────────────────────────────────────────────────
-
-    private struct SpotifyTrack { let title: String; let artist: String; let durationSec: Double }
-
-    private func spotifyToken(clientId: String, secret: String) async throws -> String {
-        var req = URLRequest(url: URL(string: "https://accounts.spotify.com/api/token")!)
-        req.httpMethod = "POST"
-        req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        let creds = Data("\(clientId):\(secret)".utf8).base64EncodedString()
-        req.setValue("Basic \(creds)", forHTTPHeaderField: "Authorization")
-        req.httpBody = Data("grant_type=client_credentials".utf8)
-        let (data, _) = try await session.data(for: req)
-        struct R: Decodable { let access_token: String }
-        if let decoded = try? JSONDecoder().decode(R.self, from: data) { return decoded.access_token }
-        let raw = String(data: data, encoding: .utf8) ?? ""
-        throw ImportError.network("Spotify auth failed: \(raw.prefix(200))")
-    }
-
-    private func fetchSpotifyTracks(playlistId: String, token: String) async throws -> [SpotifyTrack] {
-        var result: [SpotifyTrack] = []
-        var offset = 0
-        let limit  = 100
-
-        while true {
-            var comps = URLComponents(string: "https://api.spotify.com/v1/playlists/\(playlistId)/tracks")!
-            comps.queryItems = [
-                URLQueryItem(name: "limit",  value: "\(limit)"),
-                URLQueryItem(name: "offset", value: "\(offset)"),
-                URLQueryItem(name: "fields", value: "next,items(track(name,duration_ms,artists(name)))")
-            ]
-            var req = URLRequest(url: comps.url!)
-            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-            let (data, _) = try await session.data(for: req)
-
-            guard let json  = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let items = json["items"] as? [[String: Any]]
-            else { throw ImportError.network("Could not parse Spotify tracks") }
-
-            for item in items {
-                guard let track      = item["track"]    as? [String: Any],
-                      let name       = track["name"]    as? String,
-                      let durMs      = track["duration_ms"] as? Int,
-                      let artists    = track["artists"] as? [[String: Any]],
-                      let artist     = artists.first?["name"] as? String
-                else { continue }
-                result.append(SpotifyTrack(title: name, artist: artist,
-                                           durationSec: Double(durMs) / 1000))
-            }
-
-            if (json["next"] as? String) == nil { break }
-            offset += limit
-        }
-        return result
     }
 
     // ── Scoring ───────────────────────────────────────────────────────────────
