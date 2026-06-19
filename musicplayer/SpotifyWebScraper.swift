@@ -11,6 +11,14 @@ struct SpotifyScrapedTrack: Sendable {
     let durationSec: Double
 }
 
+/// The full result of a scrape: the track list plus the playlist's own
+/// display name and cover-art URL (when the player exposes them).
+struct SpotifyScrapeResult: Sendable {
+    var name: String?
+    var coverURL: String?
+    var tracks: [SpotifyScrapedTrack]
+}
+
 /// Scrapes a public Spotify playlist by driving a hidden `WKWebView`.
 ///
 /// Spotify's anonymous `get_access_token` endpoint now returns 403 and the
@@ -33,9 +41,11 @@ final class SpotifyWebScraper: NSObject, WKScriptMessageHandler {
     private func dbg(_ s: String) { if debug { print("SCRAPER ⋯ \(s)") } }
 
     private var webView: WKWebView?
-    private var continuation: CheckedContinuation<[SpotifyScrapedTrack], Error>?
+    private var continuation: CheckedContinuation<SpotifyScrapeResult, Error>?
 
     private var ordered: [SpotifyScrapedTrack] = []
+    private var playlistName: String?
+    private var playlistCoverURL: String?
     private var seen = Set<String>()
     private var expectedTotal = 0
     private var finished = false
@@ -45,7 +55,7 @@ final class SpotifyWebScraper: NSObject, WKScriptMessageHandler {
 
     // MARK: - Entry point
 
-    func scrape(playlistId: String) async throws -> [SpotifyScrapedTrack] {
+    func scrape(playlistId: String) async throws -> SpotifyScrapeResult {
         self.playlistId = playlistId
         return try await withCheckedThrowingContinuation { cont in
             self.continuation = cont
@@ -85,7 +95,7 @@ final class SpotifyWebScraper: NSObject, WKScriptMessageHandler {
             guard let self, !self.finished else { return }
             self.dbg("timeout fired; ordered=\(self.ordered.count)")
             if self.ordered.isEmpty { self.tryEmbedFallback() }
-            else { self.finish(self.ordered) }
+            else { self.finish() }
         }
     }
 
@@ -121,10 +131,10 @@ final class SpotifyWebScraper: NSObject, WKScriptMessageHandler {
             }
         case "complete":
             dbg("complete; ordered=\(ordered.count)")
-            finish(ordered)
+            finish()
         case "empty", "error":
             dbg("\(type) received; ordered=\(ordered.count) → \(ordered.isEmpty ? "embed fallback" : "finish")")
-            if ordered.isEmpty { tryEmbedFallback() } else { finish(ordered) }
+            if ordered.isEmpty { tryEmbedFallback() } else { finish() }
         default:
             break
         }
@@ -136,19 +146,25 @@ final class SpotifyWebScraper: NSObject, WKScriptMessageHandler {
 
         if expectedTotal == 0, let total = Self.findTotal(obj) { expectedTotal = total }
 
+        if playlistName == nil || playlistCoverURL == nil {
+            let meta = Self.extractMeta(obj)
+            if playlistName == nil { playlistName = meta.name }
+            if playlistCoverURL == nil { playlistCoverURL = meta.cover }
+        }
+
         for t in Self.extractTracks(obj) {
             let key = t.uri.isEmpty ? "\(t.title)|\(t.artist)|\(Int(t.durationSec))" : t.uri
             if seen.insert(key).inserted { ordered.append(t) }
         }
 
-        if expectedTotal > 0, ordered.count >= expectedTotal { finish(ordered) }
+        if expectedTotal > 0, ordered.count >= expectedTotal { finish() }
     }
 
     // MARK: - Embed fallback (__NEXT_DATA__)
 
     private func tryEmbedFallback() {
         guard !usedEmbedFallback, !finished else {
-            if !finished { finish(ordered) }
+            if !finished { finish() }
             return
         }
         usedEmbedFallback = true
@@ -174,7 +190,7 @@ final class SpotifyWebScraper: NSObject, WKScriptMessageHandler {
 
     private func readEmbed() async {
         guard !finished, let wv = webView else {
-            if !finished { finish(ordered) }
+            if !finished { finish() }
             return
         }
         let js = "var e=document.getElementById('__NEXT_DATA__'); e ? e.textContent : ''"
@@ -190,18 +206,25 @@ final class SpotifyWebScraper: NSObject, WKScriptMessageHandler {
                 let key = t.uri.isEmpty ? "\(t.title)|\(t.artist)" : t.uri
                 if seen.insert(key).inserted { ordered.append(t) }
             }
+            let meta = Self.extractEmbedMeta(obj)
+            if playlistName == nil { playlistName = meta.name }
+            if playlistCoverURL == nil { playlistCoverURL = meta.cover }
         }
-        finish(ordered)
+        finish()
     }
 
     // MARK: - Completion
 
-    private func finish(_ tracks: [SpotifyScrapedTrack]) {
+    private func finish() {
         guard !finished else { return }
         finished = true
         timeoutTask?.cancel()
         teardownWebView()
-        continuation?.resume(returning: tracks)
+        let result = SpotifyScrapeResult(name: playlistName,
+                                         coverURL: playlistCoverURL,
+                                         tracks: ordered)
+        dbg("finish name=\(playlistName ?? "nil") cover=\(playlistCoverURL != nil) tracks=\(ordered.count)")
+        continuation?.resume(returning: result)
         continuation = nil
     }
 
@@ -230,6 +253,51 @@ final class SpotifyWebScraper: NSObject, WKScriptMessageHandler {
         }
         walk(root)
         return out
+    }
+
+    /// Pull the playlist's own name + cover from a pathfinder response. The
+    /// playlist node is the dict whose `__typename` is `Playlist` (it also
+    /// carries the `name`, `images`/`coverArt` we want — Track nodes have a
+    /// `name` too, so we must key off the typename).
+    static func extractMeta(_ root: Any) -> (name: String?, cover: String?) {
+        var name: String? = nil
+        var cover: String? = nil
+        func walk(_ node: Any) {
+            if let d = node as? [String: Any] {
+                if let tn = d["__typename"] as? String,
+                   tn == "Playlist" || tn == "PlaylistV2" || tn == "PseudoPlaylist" {
+                    if name == nil, let n = d["name"] as? String, !n.isEmpty { name = n }
+                    if cover == nil, let c = coverFrom(d) { cover = c }
+                }
+                for (_, v) in d { walk(v) }
+            } else if let a = node as? [Any] {
+                for v in a { walk(v) }
+            }
+        }
+        walk(root)
+        return (name, cover)
+    }
+
+    /// Largest-resolution image URL from an `images.items[].sources[]` or a
+    /// `coverArt.sources[]` shape.
+    private static func coverFrom(_ d: [String: Any]) -> String? {
+        func best(_ sources: [[String: Any]]) -> String? {
+            let scored = sources.compactMap { s -> (Int, String)? in
+                guard let u = s["url"] as? String, !u.isEmpty else { return nil }
+                let w = (s["width"] as? Int) ?? (s["width"] as? Double).map(Int.init) ?? 0
+                return (w, u)
+            }
+            return scored.max(by: { $0.0 < $1.0 })?.1
+        }
+        if let images = d["images"] as? [String: Any],
+           let items = images["items"] as? [[String: Any]],
+           let first = items.first,
+           let sources = first["sources"] as? [[String: Any]],
+           let url = best(sources) { return url }
+        if let coverArt = d["coverArt"] as? [String: Any],
+           let sources = coverArt["sources"] as? [[String: Any]],
+           let url = best(sources) { return url }
+        return nil
     }
 
     private static func parseTrack(_ d: [String: Any]) -> SpotifyScrapedTrack? {
@@ -302,6 +370,26 @@ final class SpotifyWebScraper: NSObject, WKScriptMessageHandler {
         }
         walk(root)
         return out
+    }
+
+    /// Name + cover from the embed `__NEXT_DATA__` — the "entity" dict carries
+    /// `name`, `coverArt`/`images`, and `trackList` together.
+    static func extractEmbedMeta(_ root: Any) -> (name: String?, cover: String?) {
+        var name: String? = nil
+        var cover: String? = nil
+        func walk(_ node: Any) {
+            if let d = node as? [String: Any] {
+                if d["trackList"] is [Any] || d["coverArt"] != nil {
+                    if name == nil, let n = d["name"] as? String, !n.isEmpty { name = n }
+                    if cover == nil, let c = coverFrom(d) { cover = c }
+                }
+                for (_, v) in d { walk(v) }
+            } else if let a = node as? [Any] {
+                for v in a { walk(v) }
+            }
+        }
+        walk(root)
+        return (name, cover)
     }
 
     // MARK: - Injected JavaScript

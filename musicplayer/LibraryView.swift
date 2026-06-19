@@ -262,7 +262,7 @@ struct LibraryView: View {
 
     private func userPlaylistRow(_ pl: Playlist, isLast: Bool) -> some View {
         HStack(spacing: 14) {
-            ThumbnailView(url: nil, seed: pl.tracks.first?.seed ?? 0, cornerRadius: 8)
+            ThumbnailView(url: pl.coverURL, seed: pl.tracks.first?.seed ?? 0, cornerRadius: 8)
                 .frame(width: 44, height: 44)
                 .overlay {
                     if pl.tracks.isEmpty {

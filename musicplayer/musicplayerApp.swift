@@ -21,9 +21,10 @@ struct AryaMusixApp: App {
         do {
             let scraper = SpotifyWebScraper()
             scraper.debug = true
-            let tracks = try await scraper.scrape(playlistId: id)
-            print("SCRAPER_TEST ✓ got \(tracks.count) tracks")
-            for t in tracks.prefix(10) {
+            let r = try await scraper.scrape(playlistId: id)
+            print("SCRAPER_TEST ✓ name=\(r.name ?? "nil") cover=\(r.coverURL ?? "nil")")
+            print("SCRAPER_TEST ✓ got \(r.tracks.count) tracks")
+            for t in r.tracks.prefix(10) {
                 print("  • \(t.title) — \(t.artist) (\(Int(t.durationSec))s)")
             }
         } catch {

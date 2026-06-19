@@ -30,12 +30,14 @@ struct Playlist: Identifiable, Equatable, Codable {
     let title: String
     let author: String
     var tracks: [Track]
+    var coverURL: String?
 
-    init(id: UUID = UUID(), title: String, author: String, tracks: [Track] = []) {
+    init(id: UUID = UUID(), title: String, author: String, tracks: [Track] = [], coverURL: String? = nil) {
         self.id = id
         self.title = title
         self.author = author
         self.tracks = tracks
+        self.coverURL = coverURL
     }
     
     // Legacy support for sample data

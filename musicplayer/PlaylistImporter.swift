@@ -99,7 +99,7 @@ actor PlaylistImporter {
     func importSpotify(
         playlistId: String,
         onProgress: @Sendable @escaping (ImportProgress) -> Void
-    ) async throws -> (imported: [TrackMetadata], missed: [String]) {
+    ) async throws -> (imported: [TrackMetadata], missed: [String], name: String?, coverURL: String?) {
         await MainActor.run {
             onProgress(ImportProgress(phase: "Reading Spotify playlist…", current: 0, total: 0))
         }
@@ -107,7 +107,8 @@ actor PlaylistImporter {
         // No usable Spotify API anymore (403 / Feb-2026 policy) — scrape the
         // web player in a hidden WKWebView instead. See SpotifyWebScraper.
         let scraper    = await SpotifyWebScraper()
-        let spotTracks = try await scraper.scrape(playlistId: playlistId)
+        let scraped    = try await scraper.scrape(playlistId: playlistId)
+        let spotTracks = scraped.tracks
         let total      = spotTracks.count
 
         guard total > 0 else {
@@ -132,7 +133,7 @@ actor PlaylistImporter {
                 try? await Task.sleep(nanoseconds: 300_000_000) // 300 ms every 5 tracks
             }
         }
-        return (imported, missed)
+        return (imported, missed, scraped.name, scraped.coverURL)
     }
 
     // ── YouTube match (also exposed for re-use) ───────────────────────────────

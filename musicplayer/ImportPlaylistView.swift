@@ -12,6 +12,7 @@ struct ImportPlaylistView: View {
     @State private var missed:       [String]        = []
     @State private var errorMsg:     String?         = nil
     @State private var playlistName  = ""
+    @State private var coverURL:     String?         = nil
 
     private let importer = PlaylistImporter()
 
@@ -140,10 +141,13 @@ struct ImportPlaylistView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 // Header
-                VStack(spacing: 10) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 52))
-                        .foregroundStyle(theme.accent)
+                VStack(spacing: 14) {
+                    ThumbnailView(url: coverURL,
+                                  seed: resultTracks.first?.videoId?.hashValue ?? 0,
+                                  cornerRadius: 14)
+                        .frame(width: 132, height: 132)
+                        .shadow(color: theme.ink.opacity(0.18), radius: 14, y: 8)
+
                     Text("Import complete")
                         .font(.system(size: 20, weight: .bold))
                         .foregroundStyle(theme.ink)
@@ -153,8 +157,19 @@ struct ImportPlaylistView: View {
                         .foregroundStyle(theme.ink3)
                 }
                 .frame(maxWidth: .infinity)
-                .padding(.top, 36)
-                .padding(.bottom, 28)
+                .padding(.top, 32)
+                .padding(.bottom, 20)
+
+                // Editable playlist name
+                TextField("Playlist name", text: $playlistName)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(theme.ink)
+                    .padding(.horizontal, 16).padding(.vertical, 13)
+                    .background(theme.palette.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(theme.line, lineWidth: 1))
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 24)
 
                 // Missed tracks
                 if !missed.isEmpty {
@@ -237,12 +252,19 @@ struct ImportPlaylistView: View {
                     }
 
                 case .spotify(let id):
-                    let (tracks, misses) = try await importer.importSpotify(playlistId: id) { p in
+                    let (tracks, misses, name, cover) = try await importer.importSpotify(playlistId: id) { p in
                         DispatchQueue.main.async { self.progress = p }
                     }
                     await MainActor.run {
                         self.resultTracks = tracks
                         self.missed = misses
+                        self.coverURL = cover
+                        // Default the name field to the real Spotify name
+                        // unless the user already typed one.
+                        if self.playlistName.trimmingCharacters(in: .whitespaces).isEmpty,
+                           let name, !name.isEmpty {
+                            self.playlistName = name
+                        }
                         self.phase = .summary
                     }
                 }
@@ -260,7 +282,7 @@ struct ImportPlaylistView: View {
             ? "Imported Playlist"
             : playlistName
         let tracks = resultTracks.map { $0.asTrack() }
-        let playlist = Playlist(title: name, author: "Import", tracks: tracks)
+        let playlist = Playlist(title: name, author: "Import", tracks: tracks, coverURL: coverURL)
         player.userPlaylists.append(playlist)
     }
 }
