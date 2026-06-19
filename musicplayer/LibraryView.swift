@@ -349,13 +349,7 @@ struct LibraryView: View {
             Text(track.duration)
                 .font(.system(size: 12).monospacedDigit())
                 .foregroundStyle(theme.ink3)
-            Button {} label: {
-                Image(systemName: "ellipsis")
-                    .font(.system(size: 14))
-                    .foregroundStyle(theme.ink3)
-                    .frame(width: 28, height: 28)
-            }
-            .buttonStyle(.plain)
+            SongMenuButton(track: track, iconSize: 14, hitSize: 28)
         }
         .padding(.vertical, 10)
         .onTapGesture {

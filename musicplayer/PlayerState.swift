@@ -145,6 +145,12 @@ final class PlayerState {
         }
     }
 
+    @MainActor
+    func playNext(track: Track) { SongQueue.shared.playNext(track) }
+
+    @MainActor
+    func addToQueue(track: Track) { SongQueue.shared.addToQueue(track) }
+
     func toggleLike(track: Track) {
         if let idx = likedTracks.firstIndex(where: { $0.id == track.id }) {
             likedTracks.remove(at: idx)

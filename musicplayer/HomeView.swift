@@ -13,7 +13,10 @@ struct HomeView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        // Build the de-duplicated library once per render and reuse it for the
+        // empty check, the rows, and each row's play queue.
+        let library = libraryTracks
+        return NavigationStack {
             List {
                 // Top sections keep their own internal padding, so they sit as
                 // edge-to-edge, separator-less, transparent rows.
@@ -33,14 +36,14 @@ struct HomeView: View {
 
                 // The library itself — a real List so rows are cell-reused and
                 // get native separators (and easy swipe actions later).
-                if libraryTracks.isEmpty {
+                if library.isEmpty {
                     compactEmptyRow(icon: "music.note", text: "Like songs or import a playlist to fill your library.")
                         .listRowInsets(EdgeInsets())
                         .listRowSeparator(.hidden)
                         .listRowBackground(Color.clear)
                 } else {
-                    ForEach(libraryTracks) { track in
-                        trackRow(track: track)
+                    ForEach(library) { track in
+                        trackRow(track: track, queue: library)
                             .listRowInsets(EdgeInsets(top: 0, leading: 22, bottom: 0, trailing: 22))
                             .listRowBackground(Color.clear)
                             .listRowSeparatorTint(theme.lineSoft)
@@ -265,36 +268,42 @@ struct HomeView: View {
         }
     }
 
-    private func trackRow(track: Track) -> some View {
-        Button {
-            player.play(track: track, queue: libraryTracks)
-        } label: {
-            HStack(spacing: 12) {
-                ThumbnailView(url: track.thumbnailURL, seed: track.seed, cornerRadius: 8)
-                    .frame(width: 48, height: 48)
+    private func trackRow(track: Track, queue: [Track]) -> some View {
+        HStack(spacing: 12) {
+            // Tapping the song area plays it; the menu is a sibling control so
+            // it isn't nested inside this button.
+            Button {
+                player.play(track: track, queue: queue)
+            } label: {
+                HStack(spacing: 12) {
+                    ThumbnailView(url: track.thumbnailURL, seed: track.seed, cornerRadius: 8)
+                        .frame(width: 48, height: 48)
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(track.title)
-                        .font(.system(size: 14.5, weight: .semibold))
-                        .foregroundStyle(theme.ink)
-                        .lineLimit(1)
-                    Text(track.artist)
-                        .font(.system(size: 12))
-                        .foregroundStyle(theme.ink3)
-                        .lineLimit(1)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(track.title)
+                            .font(.system(size: 14.5, weight: .semibold))
+                            .foregroundStyle(theme.ink)
+                            .lineLimit(1)
+                        Text(track.artist)
+                            .font(.system(size: 12))
+                            .foregroundStyle(theme.ink3)
+                            .lineLimit(1)
+                    }
+
+                    Spacer()
                 }
-
-                Spacer()
-
-                if !track.duration.isEmpty {
-                    Text(track.duration)
-                        .font(.system(size: 12).monospacedDigit())
-                        .foregroundStyle(theme.ink3)
-                }
+                .contentShape(Rectangle())
             }
-            .padding(.vertical, 10)
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+
+            if !track.duration.isEmpty {
+                Text(track.duration)
+                    .font(.system(size: 12).monospacedDigit())
+                    .foregroundStyle(theme.ink3)
+            }
+
+            SongMenuButton(track: track)
         }
-        .buttonStyle(.plain)
+        .padding(.vertical, 10)
     }
 }

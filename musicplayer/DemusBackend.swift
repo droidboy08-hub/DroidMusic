@@ -599,6 +599,30 @@ final class SongQueue {
         }
     }
     
+    /// Play this track immediately after the current one. If nothing is
+    /// playing, start it now.
+    func playNext(_ track: Track) {
+        guard track.videoId != nil else { return }
+        guard playingSong != nil else { play(track: track); return }
+        nextSongIds.removeAll { $0.id == track.id }
+        nextSongIds.insert(track, at: 0)
+        if !originalSongIds.contains(where: { $0.id == track.id }) {
+            originalSongIds.append(track)
+        }
+    }
+
+    /// Append this track to the end of the up-next queue. If nothing is
+    /// playing, start it now.
+    func addToQueue(_ track: Track) {
+        guard track.videoId != nil else { return }
+        guard playingSong != nil else { play(track: track); return }
+        guard !nextSongIds.contains(where: { $0.id == track.id }) else { return }
+        nextSongIds.append(track)
+        if !originalSongIds.contains(where: { $0.id == track.id }) {
+            originalSongIds.append(track)
+        }
+    }
+
     func reset() {
         playingSong = nil
         history.removeAll()

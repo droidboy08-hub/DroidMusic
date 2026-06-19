@@ -9,8 +9,6 @@ struct SearchView: View {
     @State private var isSearching: Bool = false
     @State private var searchError: String? = nil
     @State private var searchTask: Task<Void, Never>? = nil
-    @State private var showAddToPlaylist = false
-    @State private var selectedTrack: Track? = nil
     @FocusState private var isSearchFieldFocused: Bool
 
     var body: some View {
@@ -63,13 +61,6 @@ struct SearchView: View {
             }
         }
         .background(theme.palette.bg)
-        .sheet(isPresented: $showAddToPlaylist) {
-            if let track = selectedTrack {
-                AddToPlaylistView(track: track)
-                    .environment(theme)
-                    .environment(player)
-            }
-        }
         .onChange(of: query) { _, newValue in
             searchTask?.cancel()
             searchError = nil
@@ -245,17 +236,7 @@ struct SearchView: View {
                     .foregroundStyle(theme.ink3)
             }
 
-            Button {
-                isSearchFieldFocused = false
-                selectedTrack = track
-                showAddToPlaylist = true
-            } label: {
-                Image(systemName: "ellipsis")
-                    .font(.system(size: 16))
-                    .foregroundStyle(theme.ink3)
-                    .frame(width: 32, height: 32)
-            }
-            .buttonStyle(.plain)
+            SongMenuButton(track: track)
         }
         .padding(.vertical, 10)
         .overlay(alignment: .bottom) {

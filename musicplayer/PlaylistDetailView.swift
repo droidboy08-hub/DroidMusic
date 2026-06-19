@@ -125,14 +125,7 @@ struct PlaylistDetailView: View {
             
             Spacer()
             
-            Button {
-                // Actions
-            } label: {
-                Image(systemName: "ellipsis")
-                    .font(.system(size: 14))
-                    .foregroundStyle(theme.ink3)
-                    .frame(width: 32, height: 32)
-            }
+            SongMenuButton(track: track, iconSize: 14)
         }
         .padding(.vertical, 8)
         .overlay(alignment: .bottom) {
