@@ -137,20 +137,20 @@ struct NowPlayingView: View {
     // capsule; the inactive one is transparent. Video is disabled (and the
     // selection pinned to Image) when the resolved stream has no video track.
     private var videoImageToggle: some View {
-        let videoActive = player.showVideo && player.hasVideo
-
-        return HStack(spacing: 6) {
+        // Reflect the user's intent immediately; the muxed stream loads on demand
+        // (the layer itself appears once `hasVideo` becomes true).
+        HStack(spacing: 6) {
             capsuleSegment(icon: "video.fill", label: "Video",
-                           isActive: videoActive,
-                           isEnabled: player.hasVideo) {
-                guard player.hasVideo else { return }
+                           isActive: player.showVideo,
+                           isEnabled: player.videoAvailable) {
+                guard player.videoAvailable else { return }
                 withAnimation(.spring(duration: 0.25)) {
                     player.showVideo = true
                     activePanel = .artwork
                 }
             }
             capsuleSegment(icon: "photo", label: "Image",
-                           isActive: !videoActive,
+                           isActive: !player.showVideo,
                            isEnabled: true) {
                 withAnimation(.spring(duration: 0.25)) {
                     player.showVideo = false

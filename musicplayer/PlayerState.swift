@@ -9,8 +9,19 @@ final class PlayerState {
     var progress: Double = 0.0
     var liked: Bool = false
     var showNowPlaying: Bool = false
-    var showVideo: Bool = false   // user preference: show the video layer in the sheet
-    var hasVideo: Bool = false    // resolved track actually carries a video track (itag 18)
+    var showVideo: Bool = false {  // user preference: show the video layer in the sheet
+        didSet {
+            guard showVideo != oldValue else { return }
+            // Switch the live stream between audio-only and muxed (video).
+            MusicPlayer.shared.setVideoEnabled(showVideo)
+        }
+    }
+    var hasVideo: Bool = false    // muxed video stream is currently loaded (itag 18)
+
+    /// Whether video *can* be shown for the current track. Every playable track
+    /// is a YouTube video, so the toggle is available whenever something plays —
+    /// the muxed stream is only fetched on demand.
+    var videoAvailable: Bool { currentTrack?.videoId != nil }
     var nowPlayingCoverURL: String? = nil  // high-res cover from /player videoDetails (fallback)
     var showAccount: Bool = false
     var isYouTubeLoggedIn: Bool = false

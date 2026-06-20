@@ -16,6 +16,11 @@ final class MusicPlayer {
     let player = AVPlayer()                 // exposed so the video layer can attach
     private(set) var duration: Double = 0
     private(set) var hasVideo: Bool = false // true while playing a muxed itag
+    /// Whether the user wants the muxed (video) stream. Default audio-only so we
+    /// don't download video bytes the user isn't watching; flips via
+    /// `setVideoEnabled(_:)` when they toggle video in Now Playing.
+    private(set) var wantsVideo: Bool = false
+    private var currentVideoId: String?
     private(set) var currentMetadata: TrackMetadata?  // /player videoDetails for the current item
     var streamingQuality: StreamingQuality = .high
 
@@ -127,13 +132,41 @@ final class MusicPlayer {
         let generation = loadGeneration
         let videoId = track.videoId ?? ""
         guard !videoId.isEmpty else { return }
+        currentVideoId = videoId
         onPlaybackStatusChange?(false, true) // loading until URL resolved + buffered
-        Task { await resolveAndPlay(videoId: videoId, generation: generation, allowRetry: true) }
+        // Resolve in the current mode — audio-only by default, muxed if the user
+        // has video turned on (the preference persists across tracks).
+        Task { await resolveAndPlay(videoId: videoId, generation: generation, allowRetry: true, preferVideo: wantsVideo) }
     }
 
-    /// Resolve a stream URL (MWEB itag 18 → IOS itag 140 fallback) and play it.
+    /// Switch the *current* track between audio-only and muxed (video) without
+    /// losing the playback position or play/pause state. No-op if the mode is
+    /// unchanged or nothing is playing.
+    func setVideoEnabled(_ on: Bool) {
+        guard on != wantsVideo else { return }
+        wantsVideo = on
+        guard let videoId = currentVideoId else { return }   // nothing playing yet
+
+        let resume = player.currentTime().seconds
+        let wasPlaying = player.timeControlStatus == .playing || player.rate > 0
+        duration = 0
+        isResolvingStream = true
+        loadGeneration += 1
+        let generation = loadGeneration
+        onPlaybackStatusChange?(false, true)   // buffering indicator during the swap
+        Task {
+            await resolveAndPlay(videoId: videoId, generation: generation, allowRetry: true,
+                                 preferVideo: on,
+                                 resumeAt: resume.isFinite ? resume : nil,
+                                 autoplay: wasPlaying)
+        }
+    }
+
+    /// Resolve a stream URL and play it. `preferVideo` picks the muxed vs
+    /// audio-only path; `resumeAt`/`autoplay` let a mode-swap keep its place.
     /// One retry with a refreshed session covers stale `visitorData`.
-    private func resolveAndPlay(videoId: String, generation: Int, allowRetry: Bool) async {
+    private func resolveAndPlay(videoId: String, generation: Int, allowRetry: Bool,
+                                preferVideo: Bool, resumeAt: Double? = nil, autoplay: Bool = true) async {
         guard let visitorData = await SessionBootstrap.shared.visitorDataValue() else {
             if generation == loadGeneration {
                 fail("Couldn't establish a YouTube session — check your connection.")
@@ -144,16 +177,18 @@ final class MusicPlayer {
             let r = try await DemusNetwork.shared.resolve(
                 videoId: videoId,
                 visitorData: visitorData,
-                quality: streamingQuality
+                quality: streamingQuality,
+                preferVideo: preferVideo
             )
             guard generation == loadGeneration else { return }  // user moved on
-            startPlayback(resolved: r)
+            startPlayback(resolved: r, resumeAt: resumeAt, autoplay: autoplay)
         } catch PlayerError.notPlayable(let reason) {
             if generation == loadGeneration { fail(reason) }     // age/region/login — don't retry
         } catch {
             if allowRetry {
                 SessionBootstrap.shared.refresh()                // visitorData may be stale
-                await resolveAndPlay(videoId: videoId, generation: generation, allowRetry: false)
+                await resolveAndPlay(videoId: videoId, generation: generation, allowRetry: false,
+                                     preferVideo: preferVideo, resumeAt: resumeAt, autoplay: autoplay)
             } else if generation == loadGeneration {
                 fail("Couldn't load this track. It may be unavailable.")
             }
@@ -166,7 +201,7 @@ final class MusicPlayer {
                          userInfo: [NSLocalizedDescriptionKey: message]))
     }
 
-    private func startPlayback(resolved r: Resolved) {
+    private func startPlayback(resolved r: Resolved, resumeAt: Double? = nil, autoplay: Bool = true) {
         let generation = loadGeneration
         if r.durationSeconds > 0 { duration = r.durationSeconds }
         hasVideo = r.hasVideo
@@ -225,8 +260,12 @@ final class MusicPlayer {
 
         player.replaceCurrentItem(with: item)
         isResolvingStream = false
-        player.play()
-        print("▶️ [Playback] play() called — rate=\(player.rate) host=\(r.url.host ?? "?")")
+        // On a mode-swap, restore the previous position + play/pause state.
+        if let resumeAt, resumeAt > 0 {
+            player.seek(to: CMTime(seconds: resumeAt, preferredTimescale: 600))
+        }
+        if autoplay { player.play() } else { player.pause() }
+        print("▶️ [Playback] play() called — rate=\(player.rate) host=\(r.url.host ?? "?") resumeAt=\(resumeAt ?? 0) autoplay=\(autoplay)")
 
         // DIAGNOSTIC: 2.5s later, report why we are/aren't actually playing.
         Task { @MainActor in
@@ -267,6 +306,7 @@ final class MusicPlayer {
         player.replaceCurrentItem(with: nil)
         duration = 0
         hasVideo = false
+        currentVideoId = nil
         onMediaInfo?(false)
         currentMetadata = nil
         onMetadata?(nil)

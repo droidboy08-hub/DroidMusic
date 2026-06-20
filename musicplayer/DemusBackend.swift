@@ -58,10 +58,24 @@ actor DemusNetwork {
     func resolve(
         videoId: String,
         visitorData: String,
-        quality: StreamingQuality
+        quality: StreamingQuality,
+        preferVideo: Bool = true
     ) async throws -> Resolved {
         func log(_ tag: String, _ r: Resolved) {
             print("🟢 [Resolve] \(tag) itag=\(r.itag) hasVideo=\(r.hasVideo) needsLoader=\(r.needsChunkedLoader) dur=\(Int(r.durationSeconds))s")
+        }
+
+        // Audio-only mode: skip the video paths so we never download muxed
+        // itag-18 bytes the user isn't watching. IOS itag 140 is the audio
+        // source; VR is a last-resort if IOS audio is unavailable.
+        if !preferVideo {
+            if let ios = try? await resolveIOS(videoId: videoId, visitorData: visitorData, quality: quality) {
+                log("IOS(audio)", ios); return ios
+            }
+            if let vr = try? await resolveAndroidVR(videoId: videoId, visitorData: visitorData, quality: quality) {
+                log("ANDROID_VR(audio-fallback)", vr); return vr
+            }
+            return try await resolveIOSStrict(videoId: videoId, visitorData: visitorData, quality: quality)
         }
 
         // 1) MWEB progressive itag 18 (usually cipher-only → nil).
@@ -265,9 +279,15 @@ actor DemusNetwork {
                             durationSeconds: videoDuration(json, fallbackMs: f18["approxDurationMs"] as? String),
                             userAgent: ua, metadata: meta)
         }
-        let audioFormats = adaptive.filter {
+        let allAudio = adaptive.filter {
             ($0["mimeType"] as? String)?.hasPrefix("audio") == true && $0["url"] != nil
         }
+        // AVFoundation can't open WebM/Opus (itag 249/250/251) — restrict to
+        // AAC in an MP4 container (itag 139/140/256/258…). Falling through to
+        // the unfiltered list would hand AVPlayer a stream it reports as
+        // "cannot open". Keep the unfiltered list only as a last resort.
+        let mp4Audio = allAudio.filter { (($0["mimeType"] as? String) ?? "").contains("mp4") }
+        let audioFormats = mp4Audio.isEmpty ? allAudio : mp4Audio
         func audio(_ itag: Int) -> [String: Any]? {
             audioFormats.first { ($0["itag"] as? Int) == itag }
         }

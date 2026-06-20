@@ -91,20 +91,23 @@ struct CachedAsyncImage<Content: View, Placeholder: View>: View {
     }
 
     private func load() async {
-        uiImage = nil
-        guard let url else { return }
+        guard let url else { uiImage = nil; return }
         // A target size was requested but the view isn't laid out yet — wait for
         // the next pass rather than fetching a full-size image we'd re-decode.
         if targetSize != nil, maxPixelDimension == nil { return }
 
+        // Cache hit → swap in instantly. Crucially we DON'T clear uiImage first,
+        // so a recycled row showing the right cached cover never flashes the
+        // procedural placeholder mid-scroll.
         let key = cacheKey
         if let cached = ImageCache.shared.object(forKey: key) {
             uiImage = cached
             return
         }
 
-        // Fetch + decode off the main actor so fast scrolling never stalls on
-        // network or image decoding.
+        // Cache miss → show the placeholder while we fetch + decode off the main
+        // actor (so fast scrolling never stalls on network or image decoding).
+        uiImage = nil
         let image = await fetchAndDecode(url: url, maxPixel: maxPixelDimension)
         guard let image, !Task.isCancelled else { return }
 
