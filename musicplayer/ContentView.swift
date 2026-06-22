@@ -43,7 +43,7 @@ struct ContentView: View {
                         MiniPlayerView(
                             track: track,
                             playing: player.isPlaying,
-                            progress: player.progress,
+                            player: player,
                             isLoading: player.isLoading,
                             errorMessage: player.errorMessage,
                             liked: player.liked,

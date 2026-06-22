@@ -173,11 +173,41 @@ struct AppBarView: View {
     }
 }
 
+// MARK: - Mini player progress ring (isolated leaf)
+// This is the ONLY view that reads player.progress. Because PlayerState is
+// @Observable, reading `progress` here subscribes ONLY this leaf to the
+// high-frequency playback ticks — so the per-tick re-render is confined to a
+// 42×42 ring and never bubbles up to MiniPlayerView, ContentView, or the
+// scrolling tab lists.
+private struct MiniProgressRing: View {
+    let player: PlayerState
+    var hasError: Bool
+    @Environment(ThemeState.self) private var theme
+
+    var body: some View {
+        let p = player.progress.isFinite ? CGFloat(min(max(player.progress, 0), 1)) : 0
+        ZStack {
+            Circle()
+                .stroke(theme.line, lineWidth: 2.5)
+                .frame(width: 42, height: 42)
+            Circle()
+                .trim(from: 0, to: p)
+                .stroke(hasError ? Color.red : theme.accent,
+                        style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                .frame(width: 42, height: 42)
+                .rotationEffect(.degrees(-90))
+        }
+    }
+}
+
 // MARK: - Mini player (pill above tab bar)
 struct MiniPlayerView: View {
     let track: Track
     var playing: Bool
-    var progress: Double
+    // The player object is read ONLY by the MiniProgressRing leaf below, so the
+    // per-tick `progress` update never invalidates MiniPlayerView's body (and,
+    // crucially, never reaches ContentView's body or the tab lists).
+    let player: PlayerState
     var isLoading: Bool = false
     var errorMessage: String? = nil
     var liked: Bool = false
@@ -203,16 +233,9 @@ struct MiniPlayerView: View {
                     ThumbnailView(url: track.thumbnailURL, seed: track.seed, cornerRadius: 999)
                         .frame(width: 36, height: 36)
 
-                    // Progress arc ring
-                    Circle()
-                        .stroke(theme.line, lineWidth: 2.5)
-                        .frame(width: 42, height: 42)
-                    Circle()
-                        .trim(from: 0, to: CGFloat(progress))
-                        .stroke(errorMessage != nil ? Color.red : theme.accent,
-                                style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
-                        .frame(width: 42, height: 42)
-                        .rotationEffect(.degrees(-90))
+                    // Progress arc ring — isolated leaf so the per-tick progress
+                    // read doesn't re-render this whole pill.
+                    MiniProgressRing(player: player, hasError: errorMessage != nil)
 
                     if errorMessage != nil {
                         Image(systemName: "exclamationmark")
