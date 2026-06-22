@@ -50,6 +50,11 @@ final class StreamResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
     // 403s past ~1 MB regardless of header vs query param; that needs an nsig
     // solver, out of scope here.)
     private static let chunkSize: Int64 = 1_048_576
+    /// A single transient chunk failure used to kill the whole AVPlayerItem
+    /// (→ playback stops mid-song). Retry a few times with backoff before
+    /// surfacing the error, so blips / one-off 403s / stalls recover.
+    private static let maxChunkRetries = 3
+    private static let chunkTimeout: TimeInterval = 20
 
     func resourceLoader(_ resourceLoader: AVAssetResourceLoader,
                         shouldWaitForLoadingOfRequestedResource loadingRequest: AVAssetResourceLoadingRequest) -> Bool {
@@ -68,7 +73,7 @@ final class StreamResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
 
     /// Fetch [cur, min(cur+chunk, end)] via URLSession, feed it to AVPlayer,
     /// then recurse for the next chunk until the requested range is satisfied.
-    private func streamChunk(_ lr: AVAssetResourceLoadingRequest, cur: Int64, end: Int64, isFirst: Bool) {
+    private func streamChunk(_ lr: AVAssetResourceLoadingRequest, cur: Int64, end: Int64, isFirst: Bool, attempt: Int = 0) {
         if lr.isCancelled { return }
         if cur > end { lr.finishLoading(); return }
 
@@ -76,16 +81,31 @@ final class StreamResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
         var request = URLRequest(url: realURL)
         for (k, v) in headers { request.setValue(v, forHTTPHeaderField: k) }
         request.setValue("bytes=\(cur)-\(chunkEnd)", forHTTPHeaderField: "Range")
+        request.timeoutInterval = Self.chunkTimeout
 
         session.dataTask(with: request) { [weak self] data, response, error in
             guard let self else { return }
             if lr.isCancelled { return }
             let code = (response as? HTTPURLResponse)?.statusCode ?? -1
 
-            if let error = error { lr.finishLoading(with: error); return }
-            guard let http = response as? HTTPURLResponse, (200...299).contains(code),
-                  let data = data, !data.isEmpty else {
-                print("🧩 [Loader] chunk \(cur)-\(chunkEnd) FAILED status=\(code) bytes=\(data?.count ?? 0)")
+            // Retry transient failures (network blip, stall, one-off non-2xx)
+            // before giving up — a single failure otherwise stops the whole song.
+            let ok = error == nil && (200...299).contains(code) && !(data?.isEmpty ?? true)
+            if !ok {
+                if attempt < Self.maxChunkRetries {
+                    let delay = Double(attempt + 1) * 0.5   // 0.5s, 1.0s, 1.5s
+                    print("🧩 [Loader] chunk \(cur)-\(chunkEnd) status=\(code) err=\(error?.localizedDescription ?? "-") → retry \(attempt + 1)/\(Self.maxChunkRetries)")
+                    DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
+                        self.streamChunk(lr, cur: cur, end: end, isFirst: isFirst, attempt: attempt + 1)
+                    }
+                    return
+                }
+                print("🧩 [Loader] chunk \(cur)-\(chunkEnd) FAILED status=\(code) bytes=\(data?.count ?? 0) (gave up after \(Self.maxChunkRetries) retries)")
+                lr.finishLoading(with: error ?? NSError(domain: "AryaMusix", code: code,
+                    userInfo: [NSLocalizedDescriptionKey: "Stream HTTP \(code)"]))
+                return
+            }
+            guard let http = response as? HTTPURLResponse, let data = data else {
                 lr.finishLoading(with: NSError(domain: "AryaMusix", code: code,
                     userInfo: [NSLocalizedDescriptionKey: "Stream HTTP \(code)"]))
                 return
