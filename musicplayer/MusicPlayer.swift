@@ -46,6 +46,9 @@ final class MusicPlayer {
     /// Prevents the previous AVPlayerItem from publishing stale time/duration
     /// while the next track's stream URL is still being resolved.
     private var isResolvingStream = false
+    /// True from the moment a seek is requested until AVPlayer reports it done.
+    /// Gates the periodic observer so pre-seek ticks can't snap the bar back.
+    private var isSeekInFlight = false
 
     private init() {
         configureAudioSession()
@@ -88,7 +91,10 @@ final class MusicPlayer {
             queue: .main
         ) { [weak self] time in
             MainActor.assumeIsolated {   // periodic observer is on the main queue
-                guard let self, !self.isResolvingStream else { return }
+                // Skip stale ticks while a seek is in flight — AVPlayer keeps
+                // reporting the pre-seek position until the seek completes, which
+                // would snap the scrubber back to the old point.
+                guard let self, !self.isResolvingStream, !self.isSeekInFlight else { return }
                 let cur = time.seconds
                 if let d = self.player.currentItem?.duration.seconds, d.isFinite, d > 0 {
                     self.duration = d
@@ -325,7 +331,19 @@ final class MusicPlayer {
     func seek(to progress: Double) {
         guard duration > 0 else { return }
         let target = max(0, min(1, progress)) * duration
-        player.seek(to: CMTime(seconds: target, preferredTimescale: 600))
+        isSeekInFlight = true
+        player.seek(to: CMTime(seconds: target, preferredTimescale: 600)) { [weak self] _ in
+            // Completion fires off the main queue; hop back before touching state.
+            Task { @MainActor in
+                guard let self else { return }
+                self.isSeekInFlight = false
+                // Emit the settled position so the bar lands exactly where dropped.
+                let cur = self.player.currentTime().seconds
+                if self.duration > 0, cur.isFinite {
+                    self.onProgressUpdate?(cur / self.duration)
+                }
+            }
+        }
     }
 
     // MARK: - Now Playing (MPNowPlayingInfoCenter)
