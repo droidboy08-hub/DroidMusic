@@ -33,6 +33,7 @@ struct NowPlayingView: View {
     @State private var activePanel: NowPlayingPanel = .artwork
     @State private var showSleepSheet = false
     @State private var showAddToPlaylist = false
+    @State private var showFullScreenVideo = false
 
     // Elastic button-weight animation state
     @State private var isPressingPlay = false
@@ -97,6 +98,11 @@ struct NowPlayingView: View {
                     .environment(theme)
                     .environment(player)
             }
+        }
+        .fullScreenCover(isPresented: $showFullScreenVideo) {
+            FullScreenVideoView()
+                .environment(theme)
+                .environment(player)
         }
     }
 
@@ -209,6 +215,7 @@ struct NowPlayingView: View {
                     .aspectRatio(16/9, contentMode: .fit)
                     .background(Color.black)
                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .overlay(alignment: .bottomTrailing) { fullscreenButton }
                     .padding(.horizontal, 28)
                     .padding(.vertical, 14)
                     .shadow(color: theme.ink.opacity(0.22), radius: 30, y: 15)
@@ -224,6 +231,22 @@ struct NowPlayingView: View {
         .animation(.spring(duration: 0.3), value: player.showVideo)
         .animation(.spring(duration: 0.3), value: player.hasVideo)
         .simultaneousGesture(dragGesture)
+    }
+
+    // Expand-to-fullscreen control, mirroring a standard video player. Rotates
+    // the app into landscape via the fullscreen cover.
+    private var fullscreenButton: some View {
+        Button {
+            showFullScreenVideo = true
+        } label: {
+            Image(systemName: "arrow.up.left.and.arrow.down.right")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 32, height: 32)
+                .background(.black.opacity(0.45), in: Circle())
+        }
+        .buttonStyle(.plain)
+        .padding(10)
     }
 
     private var titleRow: some View {

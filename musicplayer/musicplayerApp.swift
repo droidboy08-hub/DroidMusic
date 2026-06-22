@@ -2,6 +2,7 @@ import SwiftUI
 
 @main
 struct AryaMusixApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var theme = ThemeState()
     @State private var player = PlayerState()
     @State private var settings = SettingsState()
