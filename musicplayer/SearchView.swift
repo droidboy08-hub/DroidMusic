@@ -245,17 +245,7 @@ struct SearchView: View {
                     .foregroundStyle(theme.ink3)
             }
 
-            Button {
-                isSearchFieldFocused = false
-                selectedTrack = track
-                showAddToPlaylist = true
-            } label: {
-                Image(systemName: "ellipsis")
-                    .font(.system(size: 16))
-                    .foregroundStyle(theme.ink3)
-                    .frame(width: 32, height: 32)
-            }
-            .buttonStyle(.plain)
+            TrackMenu(track: track)
         }
         .padding(.vertical, 10)
         .overlay(alignment: .bottom) {

@@ -5,6 +5,15 @@ struct HomeView: View {
     @Environment(PlayerState.self) private var player
     @Environment(\.auriaSelectTab) private var selectTab
 
+    enum LibrarySort: String, CaseIterable {
+        case lastPlayed = "Last Played"
+        case name = "Name"
+        case recentlyAdded = "Recently Added"
+        case random = "Random"
+    }
+
+    @State private var librarySort: LibrarySort = .lastPlayed
+
     private var recentTracks: [Track] {
         if let currentTrack = player.currentTrack {
             return [currentTrack] + player.likedTracks.filter { $0.id != currentTrack.id }
@@ -12,52 +21,101 @@ struct HomeView: View {
         return player.likedTracks
     }
 
-    var body: some View {
-        NavigationStack {
-            List {
-                // Top sections keep their own internal padding, so they sit as
-                // edge-to-edge, separator-less, transparent rows.
-                Group {
-                    header
-                    recentlySearched
-                    playlistRail
+    private var sortedLibraryTracks: [Track] {
+        let base = libraryTracks
+        switch librarySort {
+        case .lastPlayed:
+            let recent = player.recentPlayOrder
+            let recentMap = Dictionary(uniqueKeysWithValues: recent.enumerated().map { ($0.element.id, $0.offset) })
+            return base.sorted { a, b in
+                let posA = recentMap[a.id] ?? Int.max
+                let posB = recentMap[b.id] ?? Int.max
+                return posA < posB
+            }
+        case .name:
+            return base.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+        case .recentlyAdded:
+            // Reverse of build order (liked first, then playlists) approximates recently added
+            return Array(base.reversed())
+        case .random:
+            return base.shuffled()
+        }
+    }
 
-                    sectionHeader(title: "From your library", actionTitle: "Library") {
+    var body: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                // Top sections (they already contain their own horizontal padding)
+                header
+
+                recentlySearched
+
+                playlistRail
+
+                HStack(alignment: .center) {
+                    Text("From your library")
+                        .font(.system(size: 20, weight: .semibold, design: .serif))
+                        .foregroundStyle(theme.ink)
+                        .kerning(-0.3)
+
+                    Spacer()
+
+                    // Order toggle button
+                    Button {
+                        cycleLibrarySort()
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: librarySortIcon)
+                                .font(.system(size: 12))
+                            Text(librarySort.rawValue)
+                                .font(.system(size: 11, weight: .medium))
+                        }
+                        .foregroundStyle(theme.accent)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(theme.palette.surfaceWarm, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+
+                    Button("Library") {
                         selectTab(.library)
                     }
-                    .padding(.bottom, 6)
+                    .font(.system(size: 12.5, weight: .medium))
+                    .foregroundStyle(theme.accent)
+                    .buttonStyle(.plain)
                 }
-                .listRowInsets(EdgeInsets())
-                .listRowSeparator(.hidden)
-                .listRowBackground(Color.clear)
+                .padding(.horizontal, 22)
+                .padding(.bottom, 6)
 
-                // The library itself — a real List so rows are cell-reused and
-                // get native separators (and easy swipe actions later).
+                // Library tracks (using LazyVStack + ScrollView instead of List).
+                // This avoids SwiftUI "List failed to visit cell content" warnings
+                // that commonly appear when List + NavigationLink + complex cells
+                // live inside a NavigationStack that is also being opacity/drawingGroup-ed
+                // by the custom tab system.
                 if libraryTracks.isEmpty {
                     compactEmptyRow(icon: "music.note", text: "Like songs or import a playlist to fill your library.")
-                        .listRowInsets(EdgeInsets())
-                        .listRowSeparator(.hidden)
-                        .listRowBackground(Color.clear)
+                        .padding(.horizontal, 22)
                 } else {
-                    ForEach(libraryTracks) { track in
+                    let tracks = sortedLibraryTracks
+                    ForEach(Array(tracks.enumerated()), id: \.element.id) { index, track in
                         trackRow(track: track)
-                            .listRowInsets(EdgeInsets(top: 0, leading: 22, bottom: 0, trailing: 22))
-                            .listRowBackground(Color.clear)
-                            .listRowSeparatorTint(theme.lineSoft)
+                            .padding(.horizontal, 22)
+
+                        if index < tracks.count - 1 {
+                            Rectangle()
+                                .fill(theme.lineSoft)
+                                .frame(height: 1)
+                                .padding(.leading, 22)
+                        }
                     }
                 }
 
                 Color.clear
                     .frame(height: 110)
-                    .listRowInsets(EdgeInsets())
-                    .listRowSeparator(.hidden)
-                    .listRowBackground(Color.clear)
             }
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
-            .scrollIndicators(.hidden)
-            .background(theme.palette.bg)
         }
+        .scrollIndicators(.hidden)
+        .background(theme.palette.bg)
     }
 
     private var header: some View {
@@ -142,12 +200,13 @@ struct HomeView: View {
         VStack(alignment: .leading, spacing: 14) {
             sectionTitle("Your playlists")
 
-            if player.userPlaylists.isEmpty {
+            let playlists = prioritizedPlaylists
+            if playlists.isEmpty {
                 compactEmptyRow(icon: "music.note.list", text: "Create playlists from Library or add the current song from Now Playing.")
             } else {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(alignment: .top, spacing: 14) {
-                        ForEach(player.userPlaylists) { playlist in
+                        ForEach(playlists) { playlist in
                             NavigationLink {
                                 PlaylistDetailView(playlist: playlist)
                             } label: {
@@ -161,6 +220,18 @@ struct HomeView: View {
             }
         }
         .padding(.bottom, 30)
+    }
+
+    /// Sort playlists by lastPlayedAt descending (most recently played first).
+    /// Playlists never played (lastPlayedAt == nil) come after, preserving their relative order.
+    private var prioritizedPlaylists: [Playlist] {
+        let playlists = player.userPlaylists
+        return playlists.enumerated().sorted { lhs, rhs in
+            let l = lhs.element.lastPlayedAt ?? .distantPast
+            let r = rhs.element.lastPlayedAt ?? .distantPast
+            if l != r { return l > r }
+            return lhs.offset < rhs.offset
+        }.map { $0.element }
     }
 
     /// Every song in the user's library — liked songs plus all playlist
@@ -207,6 +278,22 @@ struct HomeView: View {
                 .buttonStyle(.plain)
         }
         .padding(.horizontal, 22)
+    }
+
+    private func cycleLibrarySort() {
+        let all = LibrarySort.allCases
+        if let idx = all.firstIndex(of: librarySort) {
+            librarySort = all[(idx + 1) % all.count]
+        }
+    }
+
+    private var librarySortIcon: String {
+        switch librarySort {
+        case .lastPlayed: return "clock.arrow.circlepath"
+        case .name: return "textformat.abc"
+        case .recentlyAdded: return "calendar.badge.plus"
+        case .random: return "shuffle"
+        }
     }
 
     private func compactEmptyRow(icon: String, text: String) -> some View {
@@ -266,35 +353,35 @@ struct HomeView: View {
     }
 
     private func trackRow(track: Track) -> some View {
-        Button {
-            player.play(track: track, queue: libraryTracks)
-        } label: {
-            HStack(spacing: 12) {
-                ThumbnailView(url: track.thumbnailURL, seed: track.seed, cornerRadius: 8)
-                    .frame(width: 48, height: 48)
+        HStack(spacing: 12) {
+            ThumbnailView(url: track.thumbnailURL, seed: track.seed, cornerRadius: 8)
+                .frame(width: 48, height: 48)
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(track.title)
-                        .font(.system(size: 14.5, weight: .semibold))
-                        .foregroundStyle(theme.ink)
-                        .lineLimit(1)
-                    Text(track.artist)
-                        .font(.system(size: 12))
-                        .foregroundStyle(theme.ink3)
-                        .lineLimit(1)
-                }
-
-                Spacer()
-
-                if !track.duration.isEmpty {
-                    Text(track.duration)
-                        .font(.system(size: 12).monospacedDigit())
-                        .foregroundStyle(theme.ink3)
-                }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(track.title)
+                    .font(.system(size: 14.5, weight: .semibold))
+                    .foregroundStyle(theme.ink)
+                    .lineLimit(1)
+                Text(track.artist)
+                    .font(.system(size: 12))
+                    .foregroundStyle(theme.ink3)
+                    .lineLimit(1)
             }
-            .padding(.vertical, 10)
-            .contentShape(Rectangle())
+
+            Spacer()
+
+            if !track.duration.isEmpty {
+                Text(track.duration)
+                    .font(.system(size: 12).monospacedDigit())
+                    .foregroundStyle(theme.ink3)
+            }
+
+            TrackMenu(track: track)
         }
-        .buttonStyle(.plain)
+        .padding(.vertical, 10)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            player.play(track: track, queue: libraryTracks)
+        }
     }
 }

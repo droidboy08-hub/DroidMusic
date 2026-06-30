@@ -90,6 +90,8 @@ struct NowPlayingView: View {
         .scaleEffect(1 - dragProgress * 0.05, anchor: .bottom)
         .opacity(1 - dragProgress * 0.35)
         .animation(.interactiveSpring(), value: dragOffset)
+        .onAppear { player.setNowPlayingVisible(true) }
+        .onDisappear { player.setNowPlayingVisible(false) }
         .sheet(isPresented: $showSleepSheet) { sleepSheet }
         .sheet(isPresented: $showAddToPlaylist) {
             if let track = player.currentTrack {
@@ -298,18 +300,18 @@ struct NowPlayingView: View {
         VStack(spacing: 10) {
             ScrubberView(
                 progress: Binding(
-                    get: { player.progress },
-                    set: { player.progress = $0 }
+                    get: { player.playback.progress },
+                    set: { player.playback.progress = $0 }
                 ),
                 onEditingChanged: { player.isSeeking = $0 },
                 onSeek: { player.seekTo($0) }
             )
             HStack {
-                Text(player.formattedCurrent())
+                Text(player.playback.formattedCurrent())
                     .font(.system(size: 12).monospacedDigit())
                     .foregroundStyle(theme.ink3)
                 Spacer()
-                Text(player.formattedRemaining())
+                Text(player.playback.formattedRemaining())
                     .font(.system(size: 12).monospacedDigit())
                     .foregroundStyle(theme.ink3)
             }
@@ -465,6 +467,42 @@ struct NowPlayingView: View {
 
             // More
             Menu {
+                if let track = player.currentTrack {
+                    Button {
+                        player.playNext(track: track)
+                    } label: {
+                        Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward")
+                    }
+                    
+                    Button {
+                        player.addToQueue(track: track)
+                    } label: {
+                        Label("Add to Queue", systemImage: "text.append")
+                    }
+                    
+                    Button {
+                        player.presentAddToPlaylist(for: track)
+                    } label: {
+                        Label("Add to Playlist", systemImage: "text.badge.plus")
+                    }
+
+                    if player.isLiked(track: track) {
+                        Button {
+                            player.toggleLike(track: track)
+                        } label: {
+                            Label("Unlike", systemImage: "heart.slash")
+                        }
+                    } else {
+                        Button {
+                            player.toggleLike(track: track)
+                        } label: {
+                            Label("Like", systemImage: "heart")
+                        }
+                    }
+
+                    Divider()
+                }
+                
                 // Sleep timer
                 Button { showSleepSheet = true } label: {
                     Label(player.sleepMinutesRemaining != nil ? "Change sleep timer" : "Sleep timer", systemImage: "moon")
@@ -499,50 +537,54 @@ struct NowPlayingView: View {
                 .textCase(.uppercase)
                 .padding(.horizontal, 28)
 
-            VStack(spacing: 0) {
-                ForEach(Array(player.recommendedTracks.prefix(3).enumerated()), id: \.element.id) { index, track in
-                    Button {
-                        player.play(track: track, queue: player.recommendedTracks)
-                    } label: {
-                        HStack(spacing: 12) {
-                            ThumbnailView(
-                                url: track.thumbnailURL,
-                                seed: track.seed,
-                                cornerRadius: 8
-                            )
-                            .frame(width: 48, height: 48)
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(spacing: 0) {
+                    ForEach(Array(player.recommendedTracks.prefix(10).enumerated()), id: \.element.id) { index, track in
+                        Button {
+                            player.play(track: track, queue: player.recommendedTracks)
+                        } label: {
+                            HStack(spacing: 12) {
+                                ThumbnailView(
+                                    url: track.thumbnailURL,
+                                    seed: track.seed,
+                                    cornerRadius: 8
+                                )
+                                .frame(width: 48, height: 48)
 
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(track.title)
-                                    .font(.system(size: 13.5, weight: .semibold))
-                                    .foregroundStyle(theme.ink)
-                                    .lineLimit(1)
-                                Text(track.artist)
-                                    .font(.system(size: 11.5))
-                                    .foregroundStyle(theme.ink3)
-                                    .lineLimit(1)
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(track.title)
+                                        .font(.system(size: 13.5, weight: .semibold))
+                                        .foregroundStyle(theme.ink)
+                                        .lineLimit(1)
+                                    Text(track.artist)
+                                        .font(.system(size: 11.5))
+                                        .foregroundStyle(theme.ink3)
+                                        .lineLimit(1)
+                                }
+
+                                Spacer()
+
+                                Image(systemName: "play.fill")
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundStyle(theme.ink2)
+                                    .frame(width: 32, height: 32)
+                                    .background(theme.palette.bg, in: Circle())
+
+                                TrackMenu(track: track)
                             }
-
-                            Spacer()
-
-                            Image(systemName: "play.fill")
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(theme.ink2)
-                                .frame(width: 32, height: 32)
-                                .background(theme.palette.bg, in: Circle())
-                        }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 8)
-                        .overlay(alignment: .bottom) {
-                            if index < min(player.recommendedTracks.count, 3) - 1 {
-                                Rectangle()
-                                    .fill(theme.lineSoft)
-                                    .frame(height: 1)
-                                    .padding(.leading, 60)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 8)
+                            .overlay(alignment: .bottom) {
+                                if index < min(player.recommendedTracks.count, 10) - 1 {
+                                    Rectangle()
+                                        .fill(theme.lineSoft)
+                                        .frame(height: 1)
+                                        .padding(.leading, 60)
+                                }
                             }
                         }
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
                 }
             }
             .background(theme.palette.surface)
@@ -552,6 +594,7 @@ struct NowPlayingView: View {
                     .strokeBorder(theme.line, lineWidth: 1)
             }
             .padding(.horizontal, 28)
+            .frame(maxHeight: 220)
         }
         .padding(.top, -28)
         .padding(.bottom, 18)

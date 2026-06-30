@@ -12,35 +12,41 @@ struct AddToPlaylistView: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 22) {
+            VStack(spacing: 8) {
                 trackPreview
 
-                VStack(alignment: .leading, spacing: 12) {
-                    sectionLabel("Add to")
+                VStack(alignment: .leading, spacing: 6) {
+                    sectionLabel(player.userPlaylists.isEmpty ? "Create one" : "Add to")
 
-                    if player.userPlaylists.isEmpty {
-                        emptyState
-                    } else {
-                        ScrollView {
-                            LazyVStack(spacing: 0) {
-                                ForEach(Array(player.userPlaylists.enumerated()), id: \.element.id) { index, playlist in
-                                    playlistRow(
-                                        playlist,
-                                        isLast: index == player.userPlaylists.count - 1
-                                    )
+                    // One unified card: "New Playlist" is always the first row,
+                    // existing playlists scroll below it. Increased size to show more playlists.
+                    VStack(spacing: 0) {
+                        createRow
+
+                        if !player.userPlaylists.isEmpty {
+                            Rectangle().fill(theme.lineSoft).frame(height: 1)
+                            ScrollView {
+                                LazyVStack(spacing: 0) {
+                                    ForEach(Array(player.userPlaylists.enumerated()), id: \.element.id) { index, playlist in
+                                        playlistRow(playlist, isLast: index == player.userPlaylists.count - 1)
+                                    }
                                 }
                             }
+                            .scrollIndicators(.hidden)
+                            .frame(minHeight: 180)  // give more room to the playlist list
                         }
-                        .scrollIndicators(.hidden)
-                        .background(theme.palette.surface)
-                        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(theme.line, lineWidth: 1))
-                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                     }
+                    .background(theme.palette.surface)
+                    .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(theme.line, lineWidth: 1))
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .frame(minHeight: 220)  // increase overall container size for playlists
                 }
 
                 Spacer(minLength: 0)
             }
-            .padding(24)
+            .padding(.horizontal, 20)
+            .padding(.top, 8)
+            .padding(.bottom, 16)
             .background(theme.palette.bg.ignoresSafeArea())
             .navigationTitle("Add to Playlist")
             .navigationBarTitleDisplayMode(.inline)
@@ -50,149 +56,106 @@ struct AddToPlaylistView: View {
                         .foregroundStyle(theme.ink)
                 }
             }
+
         }
         .presentationDetents([.medium])
         .presentationDragIndicator(.visible)
     }
 
     private var trackPreview: some View {
-        HStack(spacing: 14) {
-            ThumbnailView(url: track.thumbnailURL, seed: track.seed, cornerRadius: 12)
-                .frame(width: 64, height: 64)
+        HStack(spacing: 12) {
+            ThumbnailView(url: track.thumbnailURL, seed: track.seed, cornerRadius: 10)
+                .frame(width: 52, height: 52)
 
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 3) {
                 Text(track.title)
-                    .font(.system(size: 17, weight: .semibold))
+                    .font(.system(size: 15.5, weight: .semibold))
                     .foregroundStyle(theme.ink)
                     .lineLimit(1)
                 Text(track.artist.isEmpty ? "Unknown artist" : track.artist)
-                    .font(.system(size: 13))
+                    .font(.system(size: 12.5))
                     .foregroundStyle(theme.ink3)
                     .lineLimit(1)
             }
 
             Spacer()
         }
-        .padding(14)
-        .background(theme.palette.surface)
-        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(theme.line, lineWidth: 1))
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-    }
-
-    private var emptyState: some View {
-        VStack(spacing: 12) {
-            if isCreatingPlaylist {
-                createPlaylistForm
-            } else {
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(theme.palette.surfaceWarm)
-                    .frame(width: 86, height: 86)
-                    .overlay {
-                        Image(systemName: "music.note.list")
-                            .font(.system(size: 34, weight: .light))
-                            .foregroundStyle(theme.ink2)
-                    }
-
-                Text("No playlists yet")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(theme.ink)
-                Text("Create a playlist and add this song to it.")
-                    .font(.system(size: 13))
-                    .foregroundStyle(theme.ink3)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 18)
-
-                Button {
-                    withAnimation(.spring(duration: 0.25)) {
-                        isCreatingPlaylist = true
-                    }
-                    isNameFieldFocused = true
-                } label: {
-                    Label("Create Playlist", systemImage: "plus")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(theme.palette.bg)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 48)
-                        .background(theme.ink, in: Capsule())
-                }
-                .buttonStyle(.plain)
-                .padding(.horizontal, 18)
-                .padding(.top, 4)
-            }
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 24)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
         .background(theme.palette.surface)
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(theme.line, lineWidth: 1))
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
-    private var createPlaylistForm: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("New Playlist")
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(theme.ink)
-
-            TextField("Playlist name", text: $newPlaylistName)
-                .font(.system(size: 16))
-                .foregroundStyle(theme.ink)
-                .tint(theme.accent)
-                .focused($isNameFieldFocused)
-                .submitLabel(.done)
-                .onSubmit(createPlaylist)
-                .padding(.horizontal, 14)
-                .frame(height: 48)
-                .background(theme.palette.bg)
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .strokeBorder(theme.line, lineWidth: 1)
-                }
-
-            HStack(spacing: 10) {
-                Button("Back") {
+    @ViewBuilder
+    private var createRow: some View {
+        if isCreatingPlaylist {
+            HStack(spacing: 12) {
+                Button {
+                    newPlaylistName = ""
                     isNameFieldFocused = false
-                    withAnimation(.spring(duration: 0.25)) {
-                        isCreatingPlaylist = false
-                    }
+                    withAnimation(.easeInOut(duration: 0.2)) { isCreatingPlaylist = false }
+                } label: {
+                    createTile(systemName: "xmark")
                 }
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(theme.ink)
-                .frame(maxWidth: .infinity)
-                .frame(height: 46)
-                .background(theme.palette.bg, in: Capsule())
-                .overlay(Capsule().strokeBorder(theme.line, lineWidth: 1))
                 .buttonStyle(.plain)
 
-                Button("Create & Add") {
-                    createPlaylist()
-                }
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(theme.palette.bg)
-                .frame(maxWidth: .infinity)
-                .frame(height: 46)
-                .background(canCreatePlaylist ? theme.ink : theme.ink.opacity(0.25), in: Capsule())
-                .buttonStyle(.plain)
-                .disabled(!canCreatePlaylist)
+                TextField("Playlist name", text: $newPlaylistName)
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(theme.ink)
+                    .tint(theme.accent)
+                    .focused($isNameFieldFocused)
+                    .submitLabel(.done)
+                    .onSubmit(createPlaylist)
+                    .textInputAutocapitalization(.words)
+                    .onAppear { isNameFieldFocused = true }
+
+                Button("Create") { createPlaylist() }
+                    .font(.system(size: 14.5, weight: .semibold))
+                    .foregroundStyle(canCreatePlaylist ? theme.accent : theme.ink3)
+                    .buttonStyle(.plain)
+                    .disabled(!canCreatePlaylist)
             }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+        } else {
+            Button {
+                newPlaylistName = ""
+                withAnimation(.easeInOut(duration: 0.2)) { isCreatingPlaylist = true }
+            } label: {
+                HStack(spacing: 12) {
+                    createTile(systemName: "plus")
+                    Text("New Playlist")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(theme.accent)
+                    Spacer()
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
         }
-        .padding(.horizontal, 18)
     }
 
-    private var canCreatePlaylist: Bool {
-        !newPlaylistName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    private func createPlaylist() {
-        guard canCreatePlaylist else { return }
-        player.createPlaylist(name: newPlaylistName, adding: track)
-        dismiss()
+    private func createTile(systemName: String) -> some View {
+        RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .fill(theme.accent.opacity(0.12))
+            .frame(width: 44, height: 44)
+            .overlay {
+                Image(systemName: systemName)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(theme.accent)
+            }
     }
 
     private func playlistRow(_ playlist: Playlist, isLast: Bool) -> some View {
-        Button {
-            player.addToPlaylist(track: track, playlistId: playlist.id)
-            dismiss()
+        let isSelected = playlist.tracks.contains { $0.id == track.id }
+        return Button {
+            if !isSelected {
+                player.addToPlaylist(track: track, playlistId: playlist.id)
+                dismiss()
+            }
         } label: {
             HStack(spacing: 12) {
                 ThumbnailView(url: playlist.coverURL ?? playlist.tracks.first?.thumbnailURL, seed: playlist.tracks.first?.seed ?? 0, cornerRadius: 8)
@@ -217,9 +180,15 @@ struct AddToPlaylistView: View {
 
                 Spacer()
 
-                Image(systemName: "plus.circle")
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundStyle(theme.accent)
+                if isSelected {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(theme.accent)
+                } else {
+                    Image(systemName: "plus.circle")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(theme.accent)
+                }
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
@@ -230,6 +199,7 @@ struct AddToPlaylistView: View {
             }
         }
         .buttonStyle(.plain)
+        .disabled(isSelected)
     }
 
     private func sectionLabel(_ text: String) -> some View {
@@ -240,4 +210,15 @@ struct AddToPlaylistView: View {
             .textCase(.uppercase)
             .padding(.horizontal, 2)
     }
+
+    private var canCreatePlaylist: Bool {
+        !newPlaylistName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func createPlaylist() {
+        guard canCreatePlaylist else { return }
+        player.createPlaylist(name: newPlaylistName, adding: track)
+        dismiss()
+    }
+
 }

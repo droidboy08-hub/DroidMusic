@@ -4,69 +4,47 @@ struct LibraryView: View {
     @Environment(ThemeState.self) private var theme
     @Environment(PlayerState.self) private var player
 
+    @Binding var showCreatePlaylist: Bool
+    @Binding var newPlaylistName: String
+
     private let filters = ["Playlists", "Songs", "Albums", "Artists"]
     @State private var activeFilter = "Playlists"
-    @State private var showCreatePlaylist = false
     @State private var showImport = false
-    @State private var newPlaylistName = ""
     @State private var isSyncing = false
 
     var body: some View {
-        NavigationStack {
-            ZStack(alignment: .bottom) {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        AppBarView(
-                            title: "Library",
-                            onProfile: { player.showAccount = true },
-                            onSync: {
-                                guard !isSyncing else { return }
-                                isSyncing = true
-                                Task {
-                                    await YouTubeAccountSync.shared.sync(player: player)
-                                    await MainActor.run { isSyncing = false }
-                                }
-                            },
-                            isSyncing: isSyncing
-                        )
-                        filterChips
-                        sortRow
-
-                        switch activeFilter {
-                        case "Songs":    songsContent
-                        case "Albums":   albumsContent
-                        case "Artists":  artistsContent
-                        default:         playlistsContent
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                AppBarView(
+                    title: "Library",
+                    onProfile: { player.showAccount = true },
+                    onSync: {
+                        guard !isSyncing else { return }
+                        isSyncing = true
+                        Task {
+                            await YouTubeAccountSync.shared.sync(player: player)
+                            await MainActor.run { isSyncing = false }
                         }
+                    },
+                    isSyncing: isSyncing
+                )
+                filterChips
+                sortRow
 
-                        Color.clear.frame(height: theme.showMiniPlayer ? 110 : 70)
-                    }
+                switch activeFilter {
+                case "Songs":    songsContent
+                case "Albums":   albumsContent
+                case "Artists":  artistsContent
+                default:         playlistsContent
                 }
-                .scrollIndicators(.hidden)
-                .background(theme.palette.bg)
 
-                // FAB
-                HStack {
-                    Spacer()
-                    Button {
-                        newPlaylistName = ""
-                        showCreatePlaylist = true
-                    } label: {
-                        Image(systemName: "plus")
-                            .font(.system(size: 22, weight: .semibold))
-                            .foregroundStyle(theme.palette.bg)
-                            .frame(width: 56, height: 56)
-                            .background(theme.accent, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                            .shadow(color: theme.accent.opacity(0.35), radius: 12, y: 5)
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.trailing, 18)
-                    .padding(.bottom, theme.showMiniPlayer ? 100 : 60)
-                }
-                .sheet(isPresented: $showCreatePlaylist) {
-                    createPlaylistSheet
-                }
+                Color.clear.frame(height: theme.showMiniPlayer ? 110 : 70)
             }
+        }
+        .scrollIndicators(.hidden)
+        .background(theme.palette.bg)
+        .sheet(isPresented: $showCreatePlaylist) {
+            createPlaylistSheet
         }
     }
 
@@ -349,13 +327,7 @@ struct LibraryView: View {
             Text(track.duration)
                 .font(.system(size: 12).monospacedDigit())
                 .foregroundStyle(theme.ink3)
-            Button {} label: {
-                Image(systemName: "ellipsis")
-                    .font(.system(size: 14))
-                    .foregroundStyle(theme.ink3)
-                    .frame(width: 28, height: 28)
-            }
-            .buttonStyle(.plain)
+            TrackMenu(track: track)
         }
         .padding(.vertical, 10)
         .onTapGesture {
@@ -393,3 +365,5 @@ struct LibraryView: View {
         .padding(.vertical, 60)
     }
 }
+
+

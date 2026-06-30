@@ -173,11 +173,35 @@ struct AppBarView: View {
     }
 }
 
+// MARK: - Mini player progress ring (isolated leaf)
+// Reads PlaybackProgress only — never touches PlayerState, so tab lists
+// don't re-render on playback ticks.
+private struct MiniProgressRing: View {
+    let playback: PlaybackProgress
+    var hasError: Bool
+    @Environment(ThemeState.self) private var theme
+
+    var body: some View {
+        let p = playback.progress.isFinite ? CGFloat(min(max(playback.progress, 0), 1)) : 0
+        ZStack {
+            Circle()
+                .stroke(theme.line, lineWidth: 2.5)
+                .frame(width: 42, height: 42)
+            Circle()
+                .trim(from: 0, to: p)
+                .stroke(hasError ? Color.red : theme.accent,
+                        style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                .frame(width: 42, height: 42)
+                .rotationEffect(.degrees(-90))
+        }
+    }
+}
+
 // MARK: - Mini player (pill above tab bar)
 struct MiniPlayerView: View {
     let track: Track
     var playing: Bool
-    var progress: Double
+    let playback: PlaybackProgress
     var isLoading: Bool = false
     var errorMessage: String? = nil
     var liked: Bool = false
@@ -203,16 +227,9 @@ struct MiniPlayerView: View {
                     ThumbnailView(url: track.thumbnailURL, seed: track.seed, cornerRadius: 999)
                         .frame(width: 36, height: 36)
 
-                    // Progress arc ring
-                    Circle()
-                        .stroke(theme.line, lineWidth: 2.5)
-                        .frame(width: 42, height: 42)
-                    Circle()
-                        .trim(from: 0, to: CGFloat(progress))
-                        .stroke(errorMessage != nil ? Color.red : theme.accent,
-                                style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
-                        .frame(width: 42, height: 42)
-                        .rotationEffect(.degrees(-90))
+                    // Progress arc ring — isolated leaf so the per-tick progress
+                    // read doesn't re-render this whole pill.
+                    MiniProgressRing(playback: playback, hasError: errorMessage != nil)
 
                     if errorMessage != nil {
                         Image(systemName: "exclamationmark")
@@ -231,6 +248,7 @@ struct MiniPlayerView: View {
                                     Image(systemName: playing ? "pause.fill" : "play.fill")
                                         .font(.system(size: 9, weight: .black))
                                         .foregroundStyle(theme.ink)
+                                        .contentTransition(.symbolEffect(.replace))
                                 }
                             }
                             .frame(width: 22, height: 22)
@@ -241,7 +259,6 @@ struct MiniPlayerView: View {
                     }
                 }
                 .frame(width: 42, height: 42)
-                .animation(.spring(duration: 0.25), value: playing)
 
                 // Track info
                 VStack(alignment: .leading, spacing: 2) {
@@ -296,6 +313,11 @@ struct MiniPlayerView: View {
                     .overlay(Capsule().strokeBorder(theme.line, lineWidth: 1))
                     .shadow(color: theme.ink.opacity(0.06), radius: 10, y: 4)
             }
+            // Flatten the pill's geometry so the album art, play/pause button and
+            // action buttons all move as ONE rigid unit when the drag offset (or
+            // its snap-back spring) is applied. Without this, each child resolves
+            // its position independently and they desync.
+            .geometryGroup()
         }
         .buttonStyle(.plain)
         .offset(x: dragOffset)
@@ -346,6 +368,64 @@ struct MiniPlayerView: View {
                 .frame(width: 34, height: 34)
                 .background(theme.palette.bg, in: Circle())
                 .overlay(Circle().strokeBorder(theme.line, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// Reusable three-dot menu for any track (native Menu popover)
+struct TrackMenu: View {
+    let track: Track
+    var playlist: Playlist? = nil
+    @Environment(ThemeState.self) private var theme
+    @Environment(PlayerState.self) private var player
+
+    var body: some View {
+        Menu {
+            Button {
+                player.playNext(track: track)
+            } label: {
+                Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward")
+            }
+
+            Button {
+                player.addToQueue(track: track)
+            } label: {
+                Label("Add to Queue", systemImage: "text.append")
+            }
+
+            Button {
+                player.presentAddToPlaylist(for: track)
+            } label: {
+                Label("Add to Playlist", systemImage: "text.badge.plus")
+            }
+
+            if player.isLiked(track: track) {
+                Button {
+                    player.toggleLike(track: track)
+                } label: {
+                    Label("Unlike", systemImage: "heart.slash")
+                }
+            } else {
+                Button {
+                    player.toggleLike(track: track)
+                } label: {
+                    Label("Like", systemImage: "heart")
+                }
+            }
+
+            if let pl = playlist, player.userPlaylists.contains(where: { $0.id == pl.id }) {
+                Button(role: .destructive) {
+                    player.removeFromPlaylist(track: track, playlistId: pl.id)
+                } label: {
+                    Label("Remove from this Playlist", systemImage: "trash")
+                }
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 14))
+                .foregroundStyle(theme.ink3)
+                .frame(width: 32, height: 32)
         }
         .buttonStyle(.plain)
     }

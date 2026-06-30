@@ -13,6 +13,7 @@ struct ImportPlaylistView: View {
     @State private var errorMsg:     String?         = nil
     @State private var playlistName  = ""
     @State private var coverURL:     String?         = nil
+    @State private var useBestGuess  = false
 
     private let importer = PlaylistImporter()
 
@@ -63,14 +64,14 @@ struct ImportPlaylistView: View {
                 Text("Paste a playlist link")
                     .font(.system(size: 20, weight: .bold))
                     .foregroundStyle(theme.ink)
-                Text("Supports YouTube, YouTube Music\nand Spotify (public playlists)")
+                Text("Supports YouTube, YouTube Music,\nSpotify playlists and albums")
                     .font(.system(size: 14))
                     .foregroundStyle(theme.ink3)
                     .multilineTextAlignment(.center)
             }
 
             VStack(spacing: 12) {
-                TextField("https://music.youtube.com/playlist?list=…", text: $urlText, axis: .vertical)
+                TextField("https://open.spotify.com/album/... or playlist?list=...", text: $urlText, axis: .vertical)
                     .font(.system(size: 14))
                     .foregroundStyle(theme.ink)
                     .tint(theme.accent)
@@ -202,10 +203,25 @@ struct ImportPlaylistView: View {
                         .padding(.bottom, 28)
                 }
 
+                if !missed.isEmpty {
+                    Toggle("Import best guesses for unmatched tracks", isOn: $useBestGuess)
+                        .padding(.horizontal, 20)
+                        .padding(.bottom, 20)
+                        .tint(theme.accent)
+                }
+
                 // Save button
                 Button {
-                    saveToLibrary()
-                    dismiss()
+                    if useBestGuess && !missed.isEmpty {
+                        Task {
+                            await applyBestGuesses()
+                            saveToLibrary()
+                            dismiss()
+                        }
+                    } else {
+                        saveToLibrary()
+                        dismiss()
+                    }
                 } label: {
                     Text("Add to Library")
                         .font(.system(size: 16, weight: .semibold))
@@ -251,8 +267,8 @@ struct ImportPlaylistView: View {
                         self.phase = .summary
                     }
 
-                case .spotify(let id):
-                    let (tracks, misses, name, cover) = try await importer.importSpotify(playlistId: id) { p in
+                case .spotifyPlaylist(let id):
+                    let (tracks, misses, name, cover) = try await importer.importSpotifyPlaylist(playlistId: id) { p in
                         DispatchQueue.main.async { self.progress = p }
                     }
                     await MainActor.run {
@@ -261,6 +277,21 @@ struct ImportPlaylistView: View {
                         self.coverURL = cover
                         // Default the name field to the real Spotify name
                         // unless the user already typed one.
+                        if self.playlistName.trimmingCharacters(in: .whitespaces).isEmpty,
+                           let name, !name.isEmpty {
+                            self.playlistName = name
+                        }
+                        self.phase = .summary
+                    }
+
+                case .spotifyAlbum(let id):
+                    let (tracks, misses, name, cover) = try await importer.importSpotifyAlbum(albumId: id) { p in
+                        DispatchQueue.main.async { self.progress = p }
+                    }
+                    await MainActor.run {
+                        self.resultTracks = tracks
+                        self.missed = misses
+                        self.coverURL = cover
                         if self.playlistName.trimmingCharacters(in: .whitespaces).isEmpty,
                            let name, !name.isEmpty {
                             self.playlistName = name
@@ -284,5 +315,18 @@ struct ImportPlaylistView: View {
         let tracks = resultTracks.map { $0.asTrack() }
         let playlist = Playlist(title: name, author: "Import", tracks: tracks, coverURL: coverURL)
         player.userPlaylists.append(playlist)
+    }
+
+    private func applyBestGuesses() async {
+        var newGuesses: [TrackMetadata] = []
+        for miss in missed {
+            let parts = miss.components(separatedBy: " — ")
+            guard parts.count == 2 else { continue }
+            if let guess = await importer.bestGuessMatch(title: parts[0], artist: parts[1]) {
+                newGuesses.append(guess)
+            }
+        }
+        resultTracks.append(contentsOf: newGuesses)
+        missed.removeAll()
     }
 }

@@ -31,13 +31,15 @@ struct Playlist: Identifiable, Equatable, Codable {
     let author: String
     var tracks: [Track]
     var coverURL: String?
+    var lastPlayedAt: Date?
 
-    init(id: UUID = UUID(), title: String, author: String, tracks: [Track] = [], coverURL: String? = nil) {
+    init(id: UUID = UUID(), title: String, author: String, tracks: [Track] = [], coverURL: String? = nil, lastPlayedAt: Date? = nil) {
         self.id = id
         self.title = title
         self.author = author
         self.tracks = tracks
         self.coverURL = coverURL
+        self.lastPlayedAt = lastPlayedAt
     }
     
     // Legacy support for sample data
@@ -46,6 +48,7 @@ struct Playlist: Identifiable, Equatable, Codable {
         self.title = title
         self.author = author
         self.tracks = seeds.map { Track(title: "Song \($0)", artist: "Artist \($0)", seed: $0, duration: "3:45") }
+        self.lastPlayedAt = nil
     }
 }
 

@@ -2,13 +2,11 @@ import Foundation
 import AVFoundation
 import MediaPlayer
 
-// MARK: - AryaMusix audio engine (native AVPlayer, dual-path)
+// MARK: - AryaMusix audio engine (Demus-style InnerTube playback)
 //
-// PRIMARY: MWEB /player → progressive itag 18 (muxed H.264 + AAC, ratebypass).
-//   AVPlayer pulls the whole file with one Range request → 206, no chunking
-//   loader, video track already there for the now-playing sheet.
-// FALLBACK: IOS /player → adaptive itag 140 (AAC audio-only). googlevideo
-//   refuses whole-file ranges, so this path goes through StreamResourceLoader.
+// Stream: MWEB itag 18 (ratebypass) first, then other playback clients.
+// Metadata: IOS /player fetched in parallel while the stream URL resolves.
+// AVPlayer plays via StreamResourceLoader (AppleCoreMedia UA on unthrottled itag 18).
 @MainActor
 final class MusicPlayer {
     static let shared = MusicPlayer()
@@ -18,6 +16,8 @@ final class MusicPlayer {
     private(set) var hasVideo: Bool = false // true while playing a muxed itag
     private(set) var currentMetadata: TrackMetadata?  // /player videoDetails for the current item
     var streamingQuality: StreamingQuality = .high
+    /// 10 Hz when Now Playing is open; 1 Hz for the mini-player ring only.
+    var highFrequencyProgress = false
 
     // MARK: - Callbacks (wired by PlayerState)
     var onProgressUpdate:       ((Double) -> Void)?      // normalized 0–1
@@ -41,8 +41,17 @@ final class MusicPlayer {
     /// Prevents the previous AVPlayerItem from publishing stale time/duration
     /// while the next track's stream URL is still being resolved.
     private var isResolvingStream = false
+    /// Suppresses progress updates while AVPlayer.seek(...) is still resolving asynchronously.
+    /// Prevents the bar from snapping back to the pre-seek position.
+    private var isSeekInFlight = false
+    private var seekGeneration = 0
+    private var lastUIProgressTime: CFTimeInterval = 0
+    private var lastLockScreenTime: CFTimeInterval = 0
+    private var itemObservers: [NSObjectProtocol] = []
 
     private init() {
+        player.automaticallyWaitsToMinimizeStalling = true
+        player.preventsDisplaySleepDuringVideoPlayback = false
         configureAudioSession()
         observePlayer()
         setupRemoteControls()
@@ -77,20 +86,38 @@ final class MusicPlayer {
     // MARK: - Player observation
 
     private func observePlayer() {
-        // Progress tick (~4×/sec).
+        // Sample on a background queue; throttle UI + lock-screen writes onto MainActor.
+        let tickQueue = DispatchQueue(label: "com.aryamusix.playback.tick", qos: .utility)
         timeObserver = player.addPeriodicTimeObserver(
             forInterval: CMTime(seconds: 0.25, preferredTimescale: 600),
-            queue: .main
+            queue: tickQueue
         ) { [weak self] time in
-            MainActor.assumeIsolated {   // periodic observer is on the main queue
-                guard let self, !self.isResolvingStream else { return }
-                let cur = time.seconds
+            guard let self else { return }
+            Task { @MainActor in
+                guard !self.isResolvingStream else { return }
+
+                // Always keep duration fresh
                 if let d = self.player.currentItem?.duration.seconds, d.isFinite, d > 0 {
                     self.duration = d
                 }
+
+                guard !self.isSeekInFlight else { return }
+
+                let cur = time.seconds
                 guard cur.isFinite, self.duration > 0 else { return }
-                self.onProgressUpdate?(cur / self.duration)   // normalized 0–1
-                self.updateNowPlayingPosition(current: cur, duration: self.duration)
+
+                let now = CACurrentMediaTime()
+                let norm = cur / self.duration
+                let uiInterval = self.highFrequencyProgress ? 0.10 : 1.0
+
+                if now - self.lastUIProgressTime >= uiInterval {
+                    self.lastUIProgressTime = now
+                    self.onProgressUpdate?(norm)
+                }
+                if now - self.lastLockScreenTime >= 1.0 {
+                    self.lastLockScreenTime = now
+                    self.updateNowPlayingPosition(current: cur, duration: self.duration)
+                }
             }
         }
 
@@ -120,6 +147,8 @@ final class MusicPlayer {
     func play(track: Track) {
         duration = 0
         isResolvingStream = true
+        isSeekInFlight = false
+        seekGeneration += 1
         hasVideo = false
         currentMetadata = nil
         onMetadata?(nil)
@@ -131,21 +160,28 @@ final class MusicPlayer {
         Task { await resolveAndPlay(videoId: videoId, generation: generation, allowRetry: true) }
     }
 
-    /// Resolve a stream URL (MWEB itag 18 → IOS itag 140 fallback) and play it.
-    /// One retry with a refreshed session covers stale `visitorData`.
+    /// Resolve via WebView attestation (primary) + session-bound InnerTube (fallback).
     private func resolveAndPlay(videoId: String, generation: Int, allowRetry: Bool) async {
-        guard let visitorData = await SessionBootstrap.shared.visitorDataValue() else {
+        guard let session = await YouTubeSession.build() else {
             if generation == loadGeneration {
                 fail("Couldn't establish a YouTube session — check your connection.")
             }
             return
         }
         do {
-            let r = try await DemusNetwork.shared.resolve(
+            async let stream = InnerTubeAPI.shared.resolveStream(
                 videoId: videoId,
-                visitorData: visitorData,
+                session: session,
                 quality: streamingQuality
             )
+            async let iosMeta = InnerTubeAPI.shared.fetchMetadata(
+                videoId: videoId,
+                session: session
+            )
+            var r = try await stream
+            if let meta = await iosMeta {
+                r.metadata = meta
+            }
             guard generation == loadGeneration else { return }  // user moved on
             startPlayback(resolved: r)
         } catch PlayerError.notPlayable(let reason) {
@@ -174,13 +210,11 @@ final class MusicPlayer {
         currentMetadata = r.metadata
         onMetadata?(r.metadata)
 
-        // DIAGNOSTIC: confirm the audio session is actually live & routed for output.
-        let s = AVAudioSession.sharedInstance()
-        print("🔈 [Audio] category=\(s.category.rawValue) mode=\(s.mode.rawValue) otherPlaying=\(s.isOtherAudioPlaying) outputs=\(s.currentRoute.outputs.map { $0.portType.rawValue })")
         do {
-            try s.setCategory(.playback, mode: .default)
+            let s = AVAudioSession.sharedInstance()
+            try s.setCategory(.playback, mode: .moviePlayback)
             try s.setActive(true)
-        } catch { print("🔴 [Audio] activate failed: \(error)") }
+        } catch { print("[MusicPlayer] AudioSession: \(error)") }
 
         // Always proxy through StreamResourceLoader. googlevideo URLs are bound to
         // the minting client's UA and CoreMedia's own requests get 403'd; the loader
@@ -193,48 +227,43 @@ final class MusicPlayer {
         asset.resourceLoader.setDelegate(loader, queue: loaderQueue)
         resourceLoaderDelegate = loader
         let item = AVPlayerItem(asset: asset)
-        print("🧩 [Playback] itag=\(r.itag) hasVideo=\(r.hasVideo) ratebypass=\(!r.needsChunkedLoader) via loader")
+        item.preferredForwardBufferDuration = 30
         observeItem(item, generation: generation)
+        attachItemObservers(item: item, generation: generation)
 
-        // DIAGNOSTIC: capture the HTTP status from googlevideo (403 = expired/UA/IP-locked).
-        NotificationCenter.default.addObserver(
-            forName: .AVPlayerItemNewErrorLogEntry, object: item, queue: .main
-        ) { _ in
-            MainActor.assumeIsolated {
-                if let e = item.errorLog()?.events.last {
-                    print("🔴 [Playback] errorLog status=\(e.errorStatusCode) domain=\(e.errorDomain) comment=\(e.errorComment ?? "-") uri=\((e.uri ?? "").prefix(80))")
-                }
-            }
-        }
-        NotificationCenter.default.addObserver(
+        player.replaceCurrentItem(with: item)
+        isResolvingStream = false
+        lastUIProgressTime = 0
+        lastLockScreenTime = 0
+        player.play()
+    }
+
+    private func attachItemObservers(item: AVPlayerItem, generation: Int) {
+        clearItemObservers()
+        let center = NotificationCenter.default
+        itemObservers.append(center.addObserver(
             forName: .AVPlayerItemFailedToPlayToEndTime, object: item, queue: .main
-        ) { note in
-            let err = note.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey]
-            print("🔴 [Playback] failedToPlayToEnd: \(String(describing: err))")
-        }
-
-        // didPlayToEnd → advance queue.
-        NotificationCenter.default.addObserver(
+        ) { [weak self] note in
+            MainActor.assumeIsolated {
+                guard let self, generation == self.loadGeneration else { return }
+                let err = note.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error
+                self.onError?(err ?? NSError(domain: "AryaMusix", code: 4,
+                    userInfo: [NSLocalizedDescriptionKey: "Playback ended unexpectedly."]))
+            }
+        })
+        itemObservers.append(center.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self, generation == self.loadGeneration else { return }
                 self.onPlaybackEnd?()
             }
-        }
+        })
+    }
 
-        player.replaceCurrentItem(with: item)
-        isResolvingStream = false
-        player.play()
-        print("▶️ [Playback] play() called — rate=\(player.rate) host=\(r.url.host ?? "?")")
-
-        // DIAGNOSTIC: 2.5s later, report why we are/aren't actually playing.
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 2_500_000_000)
-            guard generation == self.loadGeneration else { return }
-            let reason = self.player.reasonForWaitingToPlay?.rawValue ?? "nil"
-            print("⏱️ [Playback +2.5s] tcs=\(self.player.timeControlStatus.rawValue) rate=\(self.player.rate) waitReason=\(reason) itemStatus=\(self.player.currentItem?.status.rawValue ?? -1) likelyToKeepUp=\(self.player.currentItem?.isPlaybackLikelyToKeepUp ?? false) loadedRanges=\(self.player.currentItem?.loadedTimeRanges.count ?? 0) playerErr=\(String(describing: self.player.error))")
-        }
+    private func clearItemObservers() {
+        for token in itemObservers { NotificationCenter.default.removeObserver(token) }
+        itemObservers.removeAll()
     }
 
     private func observeItem(_ item: AVPlayerItem, generation: Int) {
@@ -243,7 +272,6 @@ final class MusicPlayer {
             let status = item.status
             let itemError = item.error
             let itemDuration = item.duration.seconds
-            print("📦 [Item] status=\(status.rawValue) error=\(String(describing: itemError))")
             Task { @MainActor [weak self] in
                 guard let self, generation == self.loadGeneration else { return }
                 if status == .failed {
@@ -263,6 +291,10 @@ final class MusicPlayer {
     func stop() {
         loadGeneration += 1
         isResolvingStream = false
+        isSeekInFlight = false
+        seekGeneration += 1
+        clearItemObservers()
+        WebViewStreamExtractor.shared.cancel()
         player.pause()
         player.replaceCurrentItem(with: nil)
         duration = 0
@@ -279,13 +311,39 @@ final class MusicPlayer {
         let cur = player.currentTime().seconds
         guard cur.isFinite else { return }
         let target = max(0, min(cur + delta, duration > 0 ? duration : .greatestFiniteMagnitude))
-        player.seek(to: CMTime(seconds: target, preferredTimescale: 600))
+        performSeek(toSeconds: target)
     }
 
     func seek(to progress: Double) {
         guard duration > 0 else { return }
         let target = max(0, min(1, progress)) * duration
-        player.seek(to: CMTime(seconds: target, preferredTimescale: 600))
+        performSeek(toSeconds: target)
+    }
+
+    /// Performs an async seek and suppresses progress updates until AVPlayer confirms completion.
+    /// On completion we emit the actual settled position once.
+    private func performSeek(toSeconds targetSeconds: Double) {
+        seekGeneration += 1
+        let thisGen = seekGeneration
+        isSeekInFlight = true
+
+        let targetTime = CMTime(seconds: targetSeconds, preferredTimescale: 600)
+        // Use zero tolerance for music scrubbing feel (exact position)
+        player.seek(to: targetTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.seekGeneration == thisGen else { return }
+                self.isSeekInFlight = false
+
+                // Emit the real position now that the seek has landed.
+                // This prevents the "jump forward" after stale ticks were ignored.
+                let cur = self.player.currentTime().seconds
+                if cur.isFinite, let d = self.player.currentItem?.duration.seconds, d.isFinite, d > 0 {
+                    let norm = max(0, min(1, cur / d))
+                    self.lastUIProgressTime = 0 // allow this update to go through immediately
+                    self.onProgressUpdate?(norm)
+                }
+            }
+        }
     }
 
     // MARK: - Now Playing (MPNowPlayingInfoCenter)

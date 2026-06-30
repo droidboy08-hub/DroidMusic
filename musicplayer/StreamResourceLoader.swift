@@ -85,14 +85,11 @@ final class StreamResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
             if let error = error { lr.finishLoading(with: error); return }
             guard let http = response as? HTTPURLResponse, (200...299).contains(code),
                   let data = data, !data.isEmpty else {
-                print("🧩 [Loader] chunk \(cur)-\(chunkEnd) FAILED status=\(code) bytes=\(data?.count ?? 0)")
                 lr.finishLoading(with: NSError(domain: "AryaMusix", code: code,
                     userInfo: [NSLocalizedDescriptionKey: "Stream HTTP \(code)"]))
                 return
             }
 
-            // Fill content info on the first successful response. Prefer the
-            // response's own Content-Type (authoritative) over the URL `mime` guess.
             if let info = lr.contentInformationRequest {
                 info.isByteRangeAccessSupported = true
                 if let mt = http.mimeType, let uti = UTType(mimeType: mt)?.identifier {
@@ -101,9 +98,7 @@ final class StreamResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
                     info.contentType = self.contentTypeUTI
                 }
                 if let total = self.totalLength(from: http) { info.contentLength = total }
-                print("🧩 [Loader] contentInfo type=\(info.contentType ?? "?") len=\(info.contentLength) (httpMime=\(http.mimeType ?? "?"))")
             }
-            if isFirst { print("🧩 [Loader] streaming \(cur)-\(end) status=\(code) firstChunk=\(data.count)B") }
 
             lr.dataRequest?.respond(with: data)
             let next = cur + Int64(data.count)

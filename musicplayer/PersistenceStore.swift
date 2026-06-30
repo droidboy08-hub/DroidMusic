@@ -9,6 +9,9 @@ enum PersistenceKey: String {
     case userPlaylists
     case likedTracks
     case recentSearches
+    case exploreHistory
+    case exploreRecommendations
+    case recentPlaylistIDs
 
     // ThemeState
     case paletteIndex

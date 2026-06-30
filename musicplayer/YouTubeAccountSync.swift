@@ -244,7 +244,7 @@ actor YouTubeAccountSync {
             req.setValue(vd, forHTTPHeaderField: "X-Goog-Visitor-Id")
         }
         if let sapisid = cookieInfo.sapisid {
-            req.setValue(sapisidhash(sapisid: sapisid, origin: origin), forHTTPHeaderField: "Authorization")
+            req.setValue(YouTubeSession.sapisidHash(sapisid: sapisid, origin: origin), forHTTPHeaderField: "Authorization")
         }
         return req
     }

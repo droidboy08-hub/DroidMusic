@@ -6,7 +6,6 @@ import SwiftUI
 final class PlayerState {
     var currentTrack: Track? = nil
     var isPlaying: Bool = false
-    var progress: Double = 0.0
     var liked: Bool = false
     var showNowPlaying: Bool = false
     var showVideo: Bool = false   // user preference: show the video layer in the sheet
@@ -20,27 +19,13 @@ final class PlayerState {
     var debugMode: Bool = false
     var errorMessage: String? = nil
 
-    var totalSeconds: Int = 0
-
-    var currentSeconds: Int {
-        guard totalSeconds > 0 else { return 0 }
-        return Int(Double(totalSeconds) * progress)
-    }
+    /// High-frequency playback ticks — isolated so tab lists don't re-render.
+    let playback = PlaybackProgress()
 
     /// Best cover for the big now-playing artwork: high-res rewrite of the
     /// current track's thumbnail, falling back to the /player videoDetails cover.
     var displayCoverURL: String? {
         MetadataParser.highResCoverURL(currentTrack?.thumbnailURL) ?? nowPlayingCoverURL
-    }
-
-    func formattedCurrent() -> String { formatTime(currentSeconds) }
-    func formattedRemaining() -> String { 
-        guard totalSeconds > 0 else { return "0:00" }
-        return "−\(formatTime(max(0, totalSeconds - currentSeconds)))" 
-    }
-
-    private func formatTime(_ s: Int) -> String {
-        "\(s / 60):\(String(format: "%02d", s % 60))"
     }
 
     var isSeeking: Bool = false
@@ -81,6 +66,17 @@ final class PlayerState {
                 && seen.insert(track.id).inserted
         }
     }
+
+    /// Order of recently played tracks (current first, then history reversed).
+    /// Used for "Last Played" sort in Home library section.
+    var recentPlayOrder: [Track] {
+        var order: [Track] = []
+        if let current = currentTrack {
+            order.append(current)
+        }
+        order.append(contentsOf: SongQueue.shared.history.reversed())
+        return order
+    }
     private var sleepTask: Task<Void, Never>? = nil
 
     // Persisted across launches via PersistenceStore (UserDefaults).
@@ -97,12 +93,35 @@ final class PlayerState {
         didSet { PersistenceStore.save(recentSearches, for: .recentSearches) }
     }
 
+    /// Tracks played specifically while browsing/playing from the Explore tab.
+    /// Used only to power Explore-tab recommendations (scoped per user request).
+    var exploreHistory: [Track] = [] {
+        didSet { PersistenceStore.save(exploreHistory, for: .exploreHistory) }
+    }
+
+    /// Persisted previous recommendations from the Explore tab.
+    /// Allows remembering old recommendations and mixing with new ones based on recent plays.
+    var exploreRecommendations: [Track] = [] {
+        didSet { PersistenceStore.save(exploreRecommendations, for: .exploreRecommendations) }
+    }
+
+    /// List of recently played playlist IDs (most recent first).
+    /// (Legacy; now using lastPlayedAt on Playlist for sorting "Your playlists".)
+    var recentPlaylistIDs: [UUID] = [] {
+        didSet {
+            PersistenceStore.save(recentPlaylistIDs, for: .recentPlaylistIDs)
+        }
+    }
+
     init() {
         // Property observers don't fire during init, so these loads
         // hydrate state without re-saving the values we just read.
         if let v = PersistenceStore.load(.userPlaylists, as: [Playlist].self) { userPlaylists = v }
         if let v = PersistenceStore.load(.likedTracks, as: [Track].self) { likedTracks = v }
         if let v = PersistenceStore.load(.recentSearches, as: [String].self) { recentSearches = v }
+        if let v = PersistenceStore.load(.exploreHistory, as: [Track].self) { exploreHistory = v }
+        if let v = PersistenceStore.load(.exploreRecommendations, as: [Track].self) { exploreRecommendations = v }
+        if let v = PersistenceStore.load(.recentPlaylistIDs, as: [UUID].self) { recentPlaylistIDs = v }
     }
 
     @discardableResult
@@ -145,6 +164,12 @@ final class PlayerState {
         }
     }
 
+    func removeFromPlaylist(track: Track, playlistId: UUID) {
+        if let idx = userPlaylists.firstIndex(where: { $0.id == playlistId }) {
+            userPlaylists[idx].tracks.removeAll { $0.id == track.id }
+        }
+    }
+
     func toggleLike(track: Track) {
         if let idx = likedTracks.firstIndex(where: { $0.id == track.id }) {
             likedTracks.remove(at: idx)
@@ -160,7 +185,9 @@ final class PlayerState {
     }
 
     func deletePlaylist(at offsets: IndexSet) {
+        let removedIDs = offsets.map { userPlaylists[$0].id }
         userPlaylists.remove(atOffsets: offsets)
+        recentPlaylistIDs.removeAll { removedIDs.contains($0) }
     }
 
     // MARK: - Playback control
@@ -168,8 +195,90 @@ final class PlayerState {
     @MainActor
     func play(track: Track, queue: [Track]? = nil) {
         guard track.videoId != nil else { return }
+
+        // If the queue matches one of our playlists, record lastPlayedAt (descending sort for "Your playlists").
+        if let q = queue {
+            let qIDs = Set(q.map { $0.id })
+            if let idx = userPlaylists.firstIndex(where: { Set($0.tracks.map { $0.id }) == qIDs }) {
+                userPlaylists[idx].lastPlayedAt = Date()
+            }
+        }
+
         SongQueue.shared.play(track: track, queue: queue)
         syncState(with: track)
+    }
+
+    @MainActor
+    func playNext(track: Track) {
+        SongQueue.shared.playNext(track)
+    }
+
+    @MainActor
+    func addToQueue(track: Track) {
+        SongQueue.shared.addToQueue(track)
+    }
+
+    // For global add to playlist sheet support
+    var showAddToPlaylist: Bool = false
+    var addToPlaylistTrack: Track? = nil
+
+    @MainActor
+    func presentAddToPlaylist(for track: Track) {
+        addToPlaylistTrack = track
+        showAddToPlaylist = true
+    }
+
+    /// Record a play that originated in the Explore tab.
+    /// This powers Explore-only recommendations and is kept small for performance.
+    @MainActor
+    func recordExplorePlay(_ track: Track) {
+        guard track.videoId != nil else { return }
+        // Avoid immediate duplicates
+        if exploreHistory.first?.videoId == track.videoId { return }
+        exploreHistory.insert(track, at: 0)
+        if exploreHistory.count > 40 {
+            exploreHistory.removeLast()
+        }
+    }
+
+    /// Mix old persisted recommendations with newly generated ones.
+    /// Remembers old recommendations, filters out recently played, and interleaves for variety.
+    /// Called from Explore tab only.
+    @MainActor
+    func mixExploreRecommendations(oldRecs: [Track], newRecs: [Track]) -> [Track] {
+        let playedIds = Set(exploreHistory.prefix(20).compactMap { $0.videoId })
+        let filteredOld = oldRecs.filter { !playedIds.contains($0.videoId ?? "") }
+        
+        var mixed: [Track] = []
+        var oldIter = filteredOld.makeIterator()
+        var newIter = newRecs.makeIterator()
+        
+        // Interleave: prefer some old + new for mixing
+        var useOld = true
+        while mixed.count < 20 {
+            if useOld, let old = oldIter.next() {
+                if !mixed.contains(where: { $0.videoId == old.videoId }) {
+                    mixed.append(old)
+                }
+            } else if let new = newIter.next() {
+                if !mixed.contains(where: { $0.videoId == new.videoId }) && !playedIds.contains(new.videoId ?? "") {
+                    mixed.append(new)
+                }
+            } else {
+                break
+            }
+            useOld.toggle()
+            // Occasionally add extra new for freshness
+            if mixed.count % 3 == 0, let extra = newIter.next() {
+                if !mixed.contains(where: { $0.videoId == extra.videoId }) {
+                    mixed.append(extra)
+                }
+            }
+        }
+        
+        // Update persisted
+        exploreRecommendations = mixed
+        return mixed
     }
 
     @MainActor
@@ -177,44 +286,44 @@ final class PlayerState {
         currentTrack = track
         isLoading = true
         errorMessage = nil
-        progress = 0.0
-        totalSeconds = 0
+        playback.reset()
         nowPlayingCoverURL = nil
         liked = isLiked(track: track)
 
-        let player = MusicPlayer.shared
+        let engine = MusicPlayer.shared
+        engine.highFrequencyProgress = showNowPlaying
 
-        player.onNext     = { [weak self] in self?.playNextTrack() }
-        player.onPrevious = { [weak self] in self?.playPreviousTrack() }
+        engine.onNext     = { [weak self] in self?.playNextTrack() }
+        engine.onPrevious = { [weak self] in self?.playPreviousTrack() }
 
-        player.onProgressUpdate = { [weak self] p in
+        engine.onProgressUpdate = { [weak self] p in
             guard let self else { return }
-            if !self.isSeeking { self.progress = p }
-            let dur = Int(player.duration)
-            if dur > 0 && dur != self.totalSeconds {
-                self.totalSeconds = dur
+            if !self.isSeeking { self.playback.progress = p }
+            let dur = Int(engine.duration)
+            if dur > 0 && dur != self.playback.totalSeconds {
+                self.playback.totalSeconds = dur
             }
         }
-        player.onPlaybackStatusChange = { [weak self] isPlaying, isLoading in
+        engine.onPlaybackStatusChange = { [weak self] isPlaying, isLoading in
             guard let self else { return }
             self.isPlaying = isPlaying
             self.isLoading = isLoading
         }
-        player.onPlaybackEnd = { [weak self] in
+        engine.onPlaybackEnd = { [weak self] in
             guard let self else { return }
             self.isPlaying = false
-            self.progress  = 0
+            self.playback.progress = 0
             self.playNextTrack(automatic: true)
         }
-        player.onError = { [weak self] error in
+        engine.onError = { [weak self] error in
             self?.isLoading = false
             self?.isPlaying = false
             self?.errorMessage = error.localizedDescription
         }
-        player.onMediaInfo = { [weak self] hasVideo in
+        engine.onMediaInfo = { [weak self] hasVideo in
             self?.hasVideo = hasVideo
         }
-        player.onMetadata = { [weak self] meta in
+        engine.onMetadata = { [weak self] meta in
             // /player videoDetails cover, upgraded to high-res (fallback when the
             // search-provided thumbnail is missing).
             self?.nowPlayingCoverURL = MetadataParser.highResCoverURL(meta?.coverURL)
@@ -301,9 +410,13 @@ final class PlayerState {
 
     func seekTo(_ progress: Double) {
         let clampedProgress = max(0, min(1, progress))
-        self.progress = clampedProgress
-        // Don't clear isSeeking here — the scrubber's onEditingChanged(false) clears it
-        // after seek fires, preventing AVPlayer callbacks from snapping the bar back.
+        playback.progress = clampedProgress
         MusicPlayer.shared.seek(to: clampedProgress)
     }
+
+    /// Called when Now Playing opens/closes — controls UI tick rate.
+    func setNowPlayingVisible(_ visible: Bool) {
+        MusicPlayer.shared.highFrequencyProgress = visible
+    }
+
 }

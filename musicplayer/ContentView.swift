@@ -9,107 +9,174 @@ struct ContentView: View {
     @Environment(SettingsState.self) private var settings
 
     @State private var selectedTab: AuriaTab = .home
-    @State private var showAddToPlaylist = false
+    @State private var mountedTabs: Set<AuriaTab> = [.home]
+
+    // Navigation paths for tabs that support deep navigation (e.g. playlists).
+    // Resetting a path on tab selection ensures clicking a nav tab always lands on the tab root.
+    @State private var homePath = NavigationPath()
+    @State private var libraryPath = NavigationPath()
+
+    // Create playlist sheet state (lifted so the FAB can live above the mini player)
+    @State private var showCreatePlaylist = false
+    @State private var createPlaylistName = ""
+
     var body: some View {
-        GeometryReader { _ in
-            ZStack {
-                // Tab content — all four stay alive to preserve scroll position
-                HomeView()
-                    .opacity(selectedTab == .home ? 1 : 0)
-                    .allowsHitTesting(selectedTab == .home)
+        ZStack {
+            tabLayer(.home)      { NavigationStack(path: $homePath) { HomeView() } }
+            tabLayer(.search)    { SearchView() }
+            tabLayer(.explore)   { ExploreView() }
+            tabLayer(.library)   { NavigationStack(path: $libraryPath) { LibraryView(showCreatePlaylist: $showCreatePlaylist, newPlaylistName: $createPlaylistName) } }
 
-                SearchView()
-                    .opacity(selectedTab == .search ? 1 : 0)
-                    .allowsHitTesting(selectedTab == .search)
-
-                ExploreView()
-                    .opacity(selectedTab == .explore ? 1 : 0)
-                    .allowsHitTesting(selectedTab == .explore)
-
-                LibraryView()
-                    .opacity(selectedTab == .library ? 1 : 0)
-                    .allowsHitTesting(selectedTab == .library)
-                // NOTE: the itag-18 video surface lives INSIDE NowPlayingView's
-                // artwork frame (one AVPlayerLayer on the shared MusicPlayer.player,
-                // auto-sized via layerClass). It is not mounted here — a behind-the-
-                // cover layer never shows (fullScreenCover is opaque) and the manual
-                // frame math was a CoreGraphics-NaN source.
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            // Shared bottom bar overlay
-            .overlay(alignment: .bottom) {
-                VStack(spacing: 0) {
-                    if theme.showMiniPlayer, let track = player.currentTrack {
-                        MiniPlayerView(
-                            track: track,
-                            playing: player.isPlaying,
-                            progress: player.progress,
-                            isLoading: player.isLoading,
-                            errorMessage: player.errorMessage,
-                            liked: player.liked,
-                            onTap: { player.showNowPlaying = true },
-                            onToggle: { player.togglePlay() },
-                            onLike: { player.toggleLike() },
-                            onAddToPlaylist: { showAddToPlaylist = true },
-                            onPrevious: {
-                                guard player.canPlayPreviousTrack else { return }
-                                player.playPreviousTrack()
-                            },
-                            onNext: {
-                                guard player.canPlayNextTrack else { return }
-                                player.playNextTrack()
+            // Hidden WebView that keeps the YouTube session (visitorData + cookies + poToken) warm.
+            // Must stay in the view tree for reliable navigation / JS execution.
+            SessionWebViewHost()
+                .frame(width: 1, height: 1)
+                .opacity(0.01)
+                .allowsHitTesting(false)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .overlay(alignment: .bottom) {
+            VStack(spacing: 0) {
+                if theme.showMiniPlayer, let track = player.currentTrack {
+                    MiniPlayerView(
+                        track: track,
+                        playing: player.isPlaying,
+                        playback: player.playback,
+                        isLoading: player.isLoading,
+                        errorMessage: player.errorMessage,
+                        liked: player.liked,
+                        onTap: { player.showNowPlaying = true },
+                        onToggle: { player.togglePlay() },
+                        onLike: { player.toggleLike() },
+                        onAddToPlaylist: {
+                            if let track = player.currentTrack {
+                                player.presentAddToPlaylist(for: track)
                             }
-                        )
-                    }
-                    TabBarView(selected: $selectedTab)
+                        },
+                        onPrevious: {
+                            guard player.canPlayPreviousTrack else { return }
+                            player.playPreviousTrack()
+                        },
+                        onNext: {
+                            guard player.canPlayNextTrack else { return }
+                            player.playNextTrack()
+                        }
+                    )
                 }
+                TabBarView(selected: $selectedTab)
             }
-            .sheet(isPresented: $showAddToPlaylist) {
-                if let track = player.currentTrack {
-                    AddToPlaylistView(track: track)
-                        .environment(theme)
-                        .environment(player)
+        }
+        // FAB for Library tab — placed in a later overlay so it floats *above* the mini player
+        .overlay(alignment: .bottomTrailing) {
+            if selectedTab == .library {
+                Button {
+                    createPlaylistName = ""
+                    showCreatePlaylist = true
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 22, weight: .semibold))
+                        .foregroundStyle(theme.palette.bg)
+                        .frame(width: 56, height: 56)
+                        .background(theme.accent, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        .shadow(color: theme.accent.opacity(0.35), radius: 12, y: 5)
                 }
+                .buttonStyle(.plain)
+                .padding(.trailing, 18)
+                .padding(.bottom, fabBottomPadding)
             }
-            // Full-screen now-playing cover
-            .fullScreenCover(isPresented: Binding(get: { player.showNowPlaying }, set: { player.showNowPlaying = $0 })) {
-                NowPlayingView()
+        }
+        .onChange(of: selectedTab) { _, tab in
+            mountedTabs.insert(tab)
+            // Clicking any main navigation tab always takes the user to that tab's root.
+            // This pops playlist details (and any other pushed views) so "just go to it".
+            switch tab {
+            case .home:    homePath = NavigationPath()
+            case .library: libraryPath = NavigationPath()
+            default: break
+            }
+        }
+        .sheet(isPresented: Binding(get: { player.showAddToPlaylist }, set: { player.showAddToPlaylist = $0 })) {
+            if let track = player.addToPlaylistTrack {
+                AddToPlaylistView(track: track)
                     .environment(theme)
                     .environment(player)
-                    .presentationBackground(.clear) // lets app content show through on drag
             }
-            // Account popup — scales from icon position using full-screen anchor
-            .overlay {
-                ZStack {
-                    // Tap-outside-to-dismiss (only blocks touches when visible)
-                    Color.clear
-                        .contentShape(Rectangle())
-                        .ignoresSafeArea()
-                        .onTapGesture { player.showAccount = false }
-                        .allowsHitTesting(player.showAccount)
+        }
+        .fullScreenCover(isPresented: Binding(get: { player.showNowPlaying }, set: { player.showNowPlaying = $0 })) {
+            NowPlayingView()
+                .environment(theme)
+                .environment(player)
+                .presentationBackground(.clear)
+        }
+        .overlay {
+            ZStack {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .ignoresSafeArea()
+                    .onTapGesture { player.showAccount = false }
+                    .allowsHitTesting(player.showAccount)
 
-                    AccountView()
-                        .environment(theme)
-                        .environment(player)
-                        .environment(settings)
-                        .padding(.horizontal, 16)
-                        .allowsHitTesting(player.showAccount)
-                }
-                // Apply scale to the full-screen ZStack so anchor maps to screen coords
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .scaleEffect(player.showAccount ? 1 : 0.01, anchor: .accountIcon)
-                .opacity(player.showAccount ? 1 : 0)
+                AccountView()
+                    .environment(theme)
+                    .environment(player)
+                    .environment(settings)
+                    .padding(.horizontal, 16)
+                    .allowsHitTesting(player.showAccount)
             }
-            .animation(.interpolatingSpring(stiffness: 130, damping: 12), value: player.showAccount)
-            .background(theme.palette.bg.ignoresSafeArea())
-            .environment(\.auriaSelectTab, { tab in selectedTab = tab })
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .scaleEffect(player.showAccount ? 1 : 0.01, anchor: .accountIcon)
+            .opacity(player.showAccount ? 1 : 0)
+        }
+        .animation(.interpolatingSpring(stiffness: 130, damping: 12), value: player.showAccount)
+        .background(theme.palette.bg.ignoresSafeArea())
+        .environment(\.auriaSelectTab, { tab in selectedTab = tab })
+    }
+
+    /// Mount tabs on first visit.
+    /// NOTE: We deliberately skip drawingGroup on .home and .library because they
+    /// contain NavigationStack. Applying drawingGroup to a NavigationStack causes
+    /// "Unable to render flattened version of PlatformViewControllerRepresentableAdaptor<NavigationStackRepresentable>"
+    /// and related SwiftUI faults.
+    @ViewBuilder
+    private func tabLayer<Tab: View>(_ tab: AuriaTab, @ViewBuilder content: () -> Tab) -> some View {
+        if mountedTabs.contains(tab) {
+            let isActive = selectedTab == tab
+            let shouldRasterize = !isActive && (tab == .search || tab == .explore)
+
+            content()
+                .opacity(isActive ? 1 : 0)
+                .allowsHitTesting(isActive)
+                .zIndex(isActive ? 1 : 0)
+                .modifier(InactiveTabRasterizer(isInactive: shouldRasterize))
+        }
+    }
+
+    private var fabBottomPadding: CGFloat {
+        // Position the FAB above the mini player + tab bar with a visible gap.
+        // Mini player pill + its padding ≈ 66pt, tab bar ≈ 68pt.
+        let hasMiniPlayer = theme.showMiniPlayer && player.currentTrack != nil
+        let tabBarHeight: CGFloat = 68
+        let miniPlayerHeight: CGFloat = 66
+        let gap: CGFloat = hasMiniPlayer ? 24 : 14   // extra distance above the mini player
+        return (hasMiniPlayer ? miniPlayerHeight : 0) + tabBarHeight + gap
+    }
+}
+
+// MARK: - Rasterize simple tabs only (search/explore) for GPU savings.
+// We never apply drawingGroup to tabs containing NavigationStack (.home / .library)
+// because it triggers SwiftUI faults like "Unable to render flattened version of ...NavigationStackRepresentable".
+private struct InactiveTabRasterizer: ViewModifier {
+    let isInactive: Bool
+    func body(content: Content) -> some View {
+        if isInactive {
+            content.drawingGroup(opaque: false)
+        } else {
+            content
         }
     }
 }
 
 // MARK: - Anchor point for the account icon popup origin
-// Icon is 32×32 at top-right: horizontal = screenWidth - 22 - 16, vertical ≈ safeTop + 24
-// Expressed as a UnitPoint so scaleEffect can originate from there on any device.
 extension UnitPoint {
     static let accountIcon = UnitPoint(x: 0.92, y: 0.05)
 }

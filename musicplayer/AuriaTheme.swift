@@ -148,10 +148,18 @@ final class ThemeState {
 
     // Serif display font
     func displayFont(size: CGFloat, weight: Font.Weight = .regular) -> Font {
-        .custom(displayFontName, size: size).weight(weight)
+        let base = Font.custom(displayFontName, size: size)
+        // Applying .weight(.regular) sets the descriptor weight trait to 0.0,
+        // which CoreText can't apply to some serif faces (e.g. Cormorant
+        // Garamond) and spams "Unable to update Font Descriptor's weight"
+        // warnings. It's a no-op anyway, so only override for non-regular.
+        return weight == .regular ? base : base.weight(weight)
     }
 
     func editorialFont(size: CGFloat, weight: Font.Weight = .regular) -> Font {
-        .custom("DM Serif Display", size: size).weight(weight)
+        // DM Serif Display ships a single weight; applying any Font.Weight just spams
+        // CoreText "Unable to update Font Descriptor's weight" warnings without
+        // changing the render (it has no bolder face), so we never apply one.
+        Font.custom("DM Serif Display", size: size)
     }
 }
