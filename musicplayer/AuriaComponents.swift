@@ -659,6 +659,7 @@ struct SettingSegmentedRow: View {
     let label: String
     @Binding var value: String
     let options: [String]
+    var isLast: Bool = false
     @Environment(ThemeState.self) private var theme
 
     var body: some View {
@@ -694,7 +695,9 @@ struct SettingSegmentedRow: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
         .overlay(alignment: .bottom) {
-            Rectangle().fill(theme.lineSoft).frame(height: 1).padding(.leading, 14)
+            if !isLast {
+                Rectangle().fill(theme.lineSoft).frame(height: 1).padding(.leading, 14)
+            }
         }
     }
 }

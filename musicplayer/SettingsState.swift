@@ -71,6 +71,7 @@ final class SettingsState {
         if let v = PersistenceStore.load(.downloadQuality, as: String.self) { downloadQuality = v }
         if let v = PersistenceStore.load(.wifiOnly, as: Bool.self) { wifiOnly = v }
         if let v = PersistenceStore.load(.appTheme, as: String.self) { appTheme = v }
+        if appTheme == "Black" { appTheme = "System" }   // migrate old saved value
         if let v = PersistenceStore.load(.animations, as: Bool.self) { animations = v }
         if let v = PersistenceStore.load(.lyrics, as: Bool.self) { lyrics = v }
     }

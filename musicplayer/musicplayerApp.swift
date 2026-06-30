@@ -47,11 +47,8 @@ private struct AppRootView: View {
     let settings: SettingsState
 
     private var preferredColorScheme: ColorScheme? {
-        switch settings.appTheme {
-        case "Light": .light
-        case "Dark": .dark
-        default: nil
-        }
+        // System chrome matches the selected Background palette.
+        theme.palette.isDark ? .dark : .light
     }
 
     var body: some View {
@@ -61,14 +58,19 @@ private struct AppRootView: View {
             .environment(settings)
             .preferredColorScheme(preferredColorScheme)
             .onAppear {
-                theme.updateAppearance(appTheme: settings.appTheme, systemColorScheme: colorScheme)
                 MusicPlayer.shared.streamingQuality = settings.streamingQuality
+                player.miniPlayerEnabled = theme.showMiniPlayer
+                if settings.appTheme == "System" {
+                    theme.applyThemePreset("System", systemDark: colorScheme == .dark)
+                }
+            }
+            .onChange(of: theme.showMiniPlayer) { _, shown in
+                player.miniPlayerEnabled = shown
             }
             .onChange(of: colorScheme) { _, newValue in
-                theme.updateAppearance(appTheme: settings.appTheme, systemColorScheme: newValue)
-            }
-            .onChange(of: settings.appTheme) { _, newValue in
-                theme.updateAppearance(appTheme: newValue, systemColorScheme: colorScheme)
+                if settings.appTheme == "System" {
+                    theme.applyThemePreset("System", systemDark: newValue == .dark)
+                }
             }
             .onChange(of: settings.streamingQuality) { _, newValue in
                 MusicPlayer.shared.streamingQuality = newValue

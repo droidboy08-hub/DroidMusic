@@ -53,8 +53,32 @@ struct AuriaPalette: Equatable {
         isDark: true
     )
 
-    static let all: [AuriaPalette] = [.bone, .sand, .mist, .inkDark]
-    static let names = ["Bone", "Sand", "Mist", "Ink"]
+    // Light saturated — readable with near-black ink
+    static let rose    = AuriaPalette(bg: Color(hex:"#F8D9E4"), bgSoft: Color(hex:"#F2C6D7"), surface: Color(hex:"#FCE7EF"), surfaceWarm: Color(hex:"#EEB6CB"), isDark: false)
+    static let fuchsia = AuriaPalette(bg: Color(hex:"#F1B6CE"), bgSoft: Color(hex:"#E9A1BF"), surface: Color(hex:"#F7CBDB"), surfaceWarm: Color(hex:"#DE8DAD"), isDark: false)
+    static let honey   = AuriaPalette(bg: Color(hex:"#F8E9AE"), bgSoft: Color(hex:"#F2DE92"), surface: Color(hex:"#FCF3C9"), surfaceWarm: Color(hex:"#EDD279"), isDark: false)
+    static let apricot = AuriaPalette(bg: Color(hex:"#FBDBBC"), bgSoft: Color(hex:"#F7C99B"), surface: Color(hex:"#FDE8D3"), surfaceWarm: Color(hex:"#F2B985"), isDark: false)
+
+    // Deep saturated — light text (isDark: true)
+    static let maroon   = AuriaPalette(bg: Color(hex:"#3D161B"), bgSoft: Color(hex:"#491D23"), surface: Color(hex:"#54242B"), surfaceWarm: Color(hex:"#602E36"), isDark: true)
+    static let mulberry = AuriaPalette(bg: Color(hex:"#4A1734"), bgSoft: Color(hex:"#571E3F"), surface: Color(hex:"#632649"), surfaceWarm: Color(hex:"#702F55"), isDark: true)  // dark pink
+    static let plum     = AuriaPalette(bg: Color(hex:"#2C1740"), bgSoft: Color(hex:"#361E4C"), surface: Color(hex:"#412759"), surfaceWarm: Color(hex:"#4C3066"), isDark: true)
+    static let ocean    = AuriaPalette(bg: Color(hex:"#13233D"), bgSoft: Color(hex:"#1A2D49"), surface: Color(hex:"#223758"), surfaceWarm: Color(hex:"#2B4166"), isDark: true)  // midnight blue
+
+    // Pitch-black (OLED)
+    static let inkBlack = AuriaPalette(bg: Color(hex:"#000000"), bgSoft: Color(hex:"#0A0A0A"), surface: Color(hex:"#121212"), surfaceWarm: Color(hex:"#1C1C1C"), isDark: true)
+
+    static let all: [AuriaPalette] = [
+        .bone, .sand, .mist, .inkDark,
+        .rose, .fuchsia, .honey, .apricot,
+        .maroon, .mulberry, .plum, .ocean, .inkBlack
+    ]
+    static let names = [
+        "Bone", "Sand", "Mist", "Ink",
+        "Rose", "Fuchsia", "Honey", "Apricot",
+        "Maroon", "Mulberry", "Plum", "Ocean", "Black"
+    ]
+    static func index(of name: String) -> Int { names.firstIndex(of: name) ?? 0 }
 }
 
 // MARK: - Tab indicator style
@@ -83,8 +107,6 @@ final class ThemeState {
     var tabStyle: TabIndicatorStyle = .topTick {
         didSet { PersistenceStore.save(tabStyle, for: .tabStyle) }
     }
-    private(set) var usesDarkAppearance = false
-
     init() {
         // Property observers don't fire during init — safe to hydrate.
         if let v = PersistenceStore.load(.paletteIndex, as: Int.self),
@@ -118,31 +140,26 @@ final class ThemeState {
     ]
 
     var palette: AuriaPalette {
-        if usesDarkAppearance {
-            return .inkDark
-        }
-
-        let selected = AuriaPalette.all[paletteIndex]
-        return selected.isDark ? .bone : selected
+        // The selected Background always wins — it overrides Light / System / Dark.
+        AuriaPalette.all[paletteIndex]
     }
     var accent: Color { accentColors[accentIndex] }
     var displayFontName: String { displayFontNames[displayFontIndex] }
 
     // Derived ink colours — adapt to dark palette
     var ink: Color  { palette.isDark ? Color(hex: "#F2ECDF") : Color(hex: "#13110E") }
-    var ink2: Color { palette.isDark ? Color(hex: "#C4BCA8") : Color(hex: "#4A4438") }
-    var ink3: Color { Color(hex: "#8A8273") }
+    var ink2: Color { ink.opacity(0.78) }   // was a fixed warm brown
+    var ink3: Color { ink.opacity(0.58) }   // was a fixed grey #8A8273
     var line: Color { ink.opacity(0.10) }
     var lineSoft: Color { ink.opacity(0.06) }
 
-    func updateAppearance(appTheme: String, systemColorScheme: ColorScheme) {
-        switch appTheme {
-        case "Light":
-            usesDarkAppearance = false
-        case "Dark":
-            usesDarkAppearance = true
-        default:
-            usesDarkAppearance = systemColorScheme == .dark
+    // "Theme" preset maps to a Background: Light → Bone, Dark → Black,
+    // System → follow the device (and keep tracking via the app root).
+    func applyThemePreset(_ preset: String, systemDark: Bool) {
+        switch preset {
+        case "Light": paletteIndex = AuriaPalette.index(of: "Bone")
+        case "Dark":  paletteIndex = AuriaPalette.index(of: "Black")
+        default:      paletteIndex = AuriaPalette.index(of: systemDark ? "Black" : "Bone")
         }
     }
 

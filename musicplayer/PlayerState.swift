@@ -8,6 +8,9 @@ final class PlayerState {
     var isPlaying: Bool = false
     var liked: Bool = false
     var showNowPlaying: Bool = false
+    /// Mirrors ThemeState.showMiniPlayer (synced from the app root). When the mini
+    /// player is hidden, a user-initiated play opens the full Now Playing cover.
+    var miniPlayerEnabled: Bool = true
     var showVideo: Bool = false   // user preference: show the video layer in the sheet
     var hasVideo: Bool = false    // resolved track actually carries a video track (itag 18)
     var nowPlayingCoverURL: String? = nil  // high-res cover from /player videoDetails (fallback)
@@ -206,6 +209,9 @@ final class PlayerState {
 
         SongQueue.shared.play(track: track, queue: queue)
         syncState(with: track)
+        // Mini player hidden → no compact surface to reach Now Playing, so a
+        // user-initiated play opens the full cover. Auto-advance uses other paths.
+        if !miniPlayerEnabled { showNowPlaying = true }
     }
 
     @MainActor

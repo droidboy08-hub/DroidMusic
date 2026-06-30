@@ -4,7 +4,11 @@ struct SettingsView: View {
     @Environment(ThemeState.self) private var theme
     @Environment(PlayerState.self) private var player
     @Environment(SettingsState.self) private var settings
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dismiss) private var dismiss
+
+    @State private var showAllPalettes = false
+    private let collapsedPaletteCount = 4
 
     var body: some View {
         VStack(spacing: 0) {
@@ -90,17 +94,25 @@ struct SettingsView: View {
             SettingSliderRow(label: "Crossfade", value: Bindable(settings).crossfade, min: 0, max: 12, unit: "s")
             SettingToggleRow(label: "Gapless playback", sub: "Removes silence between tracks", value: Bindable(settings).gapless)
             SettingToggleRow(label: "Normalize volume", sub: "Match loudness across tracks", value: Bindable(settings).normalize)
-            SettingLinkRow(icon: "slider.vertical.3", label: "Equalizer", value: "Bass Boost")
-            SettingLinkRow(icon: "moon", label: "Sleep timer", value: "Off", isLast: true)
+            SettingLinkRow(icon: "slider.vertical.3", label: "Equalizer", value: "Bass Boost", isLast: true)
         }
     }
 
     // MARK: - Appearance
     private var appearanceGroup: some View {
         SettingsGroup(label: "Appearance") {
-            SettingSegmentedRow(label: "Theme", value: Bindable(settings).appTheme, options: ["Light", "System", "Dark"])
-            SettingToggleRow(label: "Now-playing animations", value: Bindable(settings).animations)
-            SettingToggleRow(label: "Synced lyrics", value: Bindable(settings).lyrics, isLast: true)
+            SettingSegmentedRow(
+                label: "Theme",
+                value: Binding(
+                    get: { settings.appTheme },
+                    set: { newValue in
+                        settings.appTheme = newValue
+                        theme.applyThemePreset(newValue, systemDark: colorScheme == .dark)
+                    }
+                ),
+                options: ["Light", "System", "Dark"],
+                isLast: true
+            )
         }
     }
 
@@ -116,12 +128,29 @@ struct SettingsView: View {
     }
 
     private var paletteRow: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Background")
-                .font(.system(size: 14.5, weight: .medium))
-                .foregroundStyle(theme.ink)
+        let count = AuriaPalette.all.count
+        let visibleCount = showAllPalettes ? count : min(collapsedPaletteCount, count)
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Background")
+                    .font(.system(size: 14.5, weight: .medium))
+                    .foregroundStyle(theme.ink)
+                Spacer()
+                Button {
+                    withAnimation(.spring(duration: 0.28)) { showAllPalettes.toggle() }
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(showAllPalettes ? "Less" : "More")
+                            .font(.system(size: 12.5, weight: .medium))
+                        Image(systemName: showAllPalettes ? "chevron.up" : "chevron.down")
+                            .font(.system(size: 11, weight: .semibold))
+                    }
+                    .foregroundStyle(theme.accent)
+                }
+                .buttonStyle(.plain)
+            }
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 4), spacing: 8) {
-                ForEach(AuriaPalette.all.indices, id: \.self) { i in
+                ForEach(0..<visibleCount, id: \.self) { i in
                     let pal = AuriaPalette.all[i]
                     let isActive = theme.paletteIndex == i
                     Button {
@@ -152,6 +181,7 @@ struct SettingsView: View {
         .overlay(alignment: .bottom) {
             Rectangle().fill(theme.lineSoft).frame(height: 1).padding(.leading, 14)
         }
+        .onAppear { if theme.paletteIndex >= collapsedPaletteCount { showAllPalettes = true } }
     }
 
     private var accentRow: some View {
