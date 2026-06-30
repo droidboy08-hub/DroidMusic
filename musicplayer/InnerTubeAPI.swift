@@ -243,13 +243,16 @@ actor InnerTubeAPI {
 
     /// Demus playback client order — IOS intentionally excluded (metadata only).
     private func playbackClientOrder(session ctx: YouTubeSessionContext) -> [InnerTubeClient] {
-        // ANDROID_VR is reliable, needs no PO token, and already returns the target
-        // itag 18 + ratebypass stream — so it's the primary for instant cold-start
-        // playback (no waiting on attestation). MWEB and the plain ANDROID client
-        // both require a PO token, so they're only attempted once one has been
-        // minted; without it ANDROID just 400s and wastes a round trip.
-        var order: [InnerTubeClient] = [.androidVR]
-        if ctx.poToken != nil { order += [.mweb, .android] }
+        // Preferred: the plain ANDROID client backed by a PO token — more robust
+        // long-term than ANDROID_VR (which can't play "made for kids" videos and may
+        // go SABR-only on newer versions). ANDROID_VR sits right behind it as a
+        // token-less fallback that always returns itag 18 + ratebypass, so both
+        // cold-start (before a token is minted, ANDROID is omitted) and any ANDROID
+        // failure fall straight through to it.
+        var order: [InnerTubeClient] = []
+        if ctx.poToken != nil { order.append(.android) }
+        order.append(.androidVR)
+        if ctx.poToken != nil { order.append(.mweb) }
         if ctx.isAuthenticated { order.append(.webRemix) }
         order += [.androidMusic, .tvEmbedded]
         return order
@@ -269,6 +272,11 @@ actor InnerTubeAPI {
         for client in order {
             let cfg = client.config
             if cfg.requiresPoToken && ctx.poToken == nil { continue }
+
+            if client.usesGvsPoToken {
+                let bind = ctx.poTokenVisitorData != nil ? "vd=pot" : "vd=session"
+                print("🔑 [InnerTube/\(cfg.clientName)] attempt poToken=\(ctx.poToken != nil ? "✓" : "✗") \(bind)")
+            }
 
             do {
                 let json = try await player(videoId: videoId, session: ctx, client: client)
@@ -413,6 +421,9 @@ actor InnerTubeAPI {
         let code = (response as? HTTPURLResponse)?.statusCode ?? -1
         guard code == 200,
               let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            let pot = ctx.poToken != nil ? "pot✓" : "pot✗"
+            let bind = client.usesGvsPoToken && ctx.poTokenVisitorData != nil ? "vd=pot" : "vd=session"
+            print("🔴 [InnerTube/\(cfg.clientName)] /player HTTP \(code) (\(pot), \(bind), \(data.count) bytes)")
             throw PlayerError.badResponse
         }
         return json

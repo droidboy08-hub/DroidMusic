@@ -60,6 +60,7 @@ final class SessionBootstrap: NSObject, WKNavigationDelegate {
     /// Bumped on `refresh()` so MWEB warmup runs once per bootstrap cycle.
     private var bootstrapGeneration = 0
     private var lastWarmupGeneration = -1
+    private var poTokenRefreshTask: Task<Void, Never>?
 
     private override init() {
         let cfg = WKWebViewConfiguration()
@@ -96,6 +97,7 @@ final class SessionBootstrap: NSObject, WKNavigationDelegate {
         deviceExperimentId = nil
         rolloutToken = nil
         clickTrackingParams = nil
+        poTokenRefreshTask?.cancel()
         loading = false
         bootstrapGeneration += 1
         start()
@@ -157,6 +159,27 @@ final class SessionBootstrap: NSObject, WKNavigationDelegate {
             self.poTokenVisitorData = minted.visitorData
             let same = minted.visitorData == vd
             print("🔑 [PoToken] bound to session ✓ (visitorData \(same ? "matches" : "differs"))")
+            self.schedulePoTokenRefresh()
+        }
+    }
+
+    /// PO tokens go stale, so re-mint every 20 min to keep the ANDROID/MWEB clients
+    /// supplied with a valid token. Reschedules itself; cancelled on `refresh()`.
+    private func schedulePoTokenRefresh() {
+        poTokenRefreshTask?.cancel()
+        let gen = bootstrapGeneration
+        poTokenRefreshTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(20 * 60))
+            guard let self, !Task.isCancelled, self.bootstrapGeneration == gen else { return }
+            print("🔑 [PoToken] refreshing (periodic)…")
+            if let minted = await PoTokenMinter.shared.mint(), self.bootstrapGeneration == gen {
+                self.poToken = minted.value
+                self.poTokenVisitorData = minted.visitorData
+                print("🔑 [PoToken] refreshed ✓")
+            } else {
+                print("🔑 [PoToken] refresh failed ✗")
+            }
+            if self.bootstrapGeneration == gen { self.schedulePoTokenRefresh() }
         }
     }
 
