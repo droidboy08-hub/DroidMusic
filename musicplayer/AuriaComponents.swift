@@ -174,15 +174,16 @@ struct AppBarView: View {
 }
 
 // MARK: - Mini player progress ring (isolated leaf)
-// Reads PlaybackProgress only — never touches PlayerState, so tab lists
-// don't re-render on playback ticks.
+// Reads player.playback.progress from the environment here only — ContentView
+// and MiniPlayerView never touch playback, so progress ticks don't re-render tabs.
 private struct MiniProgressRing: View {
-    let playback: PlaybackProgress
-    var hasError: Bool
+    @Environment(PlayerState.self) private var player
     @Environment(ThemeState.self) private var theme
 
     var body: some View {
-        let p = playback.progress.isFinite ? CGFloat(min(max(playback.progress, 0), 1)) : 0
+        let p = player.playback.progress.isFinite
+            ? CGFloat(min(max(player.playback.progress, 0), 1)) : 0
+        let hasError = player.errorMessage != nil
         ZStack {
             Circle()
                 .stroke(theme.line, lineWidth: 2.5)
@@ -201,7 +202,6 @@ private struct MiniProgressRing: View {
 struct MiniPlayerView: View {
     let track: Track
     var playing: Bool
-    let playback: PlaybackProgress
     var isLoading: Bool = false
     var errorMessage: String? = nil
     var liked: Bool = false
@@ -229,7 +229,7 @@ struct MiniPlayerView: View {
 
                     // Progress arc ring — isolated leaf so the per-tick progress
                     // read doesn't re-render this whole pill.
-                    MiniProgressRing(playback: playback, hasError: errorMessage != nil)
+                    MiniProgressRing()
 
                     if errorMessage != nil {
                         Image(systemName: "exclamationmark")
