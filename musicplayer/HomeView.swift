@@ -328,6 +328,7 @@ struct HomeView: View {
                         cornerRadius: 12
                     )
                     .frame(width: 148, height: 148)
+                    .fixedSize()
                 } else {
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
                         .fill(theme.palette.surfaceWarm)
@@ -356,6 +357,7 @@ struct HomeView: View {
         HStack(spacing: 12) {
             ThumbnailView(url: track.thumbnailURL, seed: track.seed, cornerRadius: 8)
                 .frame(width: 48, height: 48)
+                .fixedSize()
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(track.title)
