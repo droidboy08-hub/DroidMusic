@@ -33,6 +33,28 @@ struct YouTubeSessionContext {
         guard let sapisid else { return nil }
         return YouTubeSession.sapisidHash(sapisid: sapisid, origin: origin)
     }
+
+    /// A copy carrying a freshly-minted PO token + its bound visitorData — used to
+    /// retry a pot client after the previous token was rejected.
+    nonisolated func withPoToken(_ token: String, visitorData boundVD: String) -> YouTubeSessionContext {
+        YouTubeSessionContext(
+            visitorData: visitorData,
+            cookieHeader: cookieHeader,
+            sapisid: sapisid,
+            poToken: token,
+            poTokenVisitorData: boundVD,
+            dataSyncId: dataSyncId,
+            clientVersion: clientVersion,
+            signatureTimestamp: signatureTimestamp,
+            appInstallData: appInstallData,
+            coldConfigData: coldConfigData,
+            coldHashData: coldHashData,
+            hotHashData: hotHashData,
+            deviceExperimentId: deviceExperimentId,
+            rolloutToken: rolloutToken,
+            clickTrackingParams: clickTrackingParams
+        )
+    }
 }
 
 enum YouTubeSession {

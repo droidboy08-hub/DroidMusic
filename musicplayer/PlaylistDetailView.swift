@@ -62,7 +62,7 @@ struct PlaylistDetailView: View {
             
             VStack(spacing: 4) {
                 Text(displayPlaylist.title)
-                    .font(theme.editorialFont(size: 28, weight: .bold))
+                    .font(theme.editorialFont(size: 28))
                     .foregroundStyle(theme.ink)
                 Text(displayPlaylist.author)
                     .font(.system(size: 14))

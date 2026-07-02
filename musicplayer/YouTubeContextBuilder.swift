@@ -6,7 +6,9 @@ import Foundation
 // Demus spoofs IOS clientName but sends a web-hybrid context (Safari, DESKTOP platform,
 // configInfo blobs, adSignalsInfo, rich playbackContext). visitorData was empty in capture.
 
-struct DemusIOSCapture {
+// `nonisolated`: compile-time constants read by the nonisolated `iosPlayerBody`
+// builder (default main-actor isolation would otherwise pin them to the main actor).
+nonisolated struct DemusIOSCapture {
     static let clientVersion = "20.25.4"
     static let userAgent = "com.google.ios.youtube/20.25.4 (iPhone17,1; U; CPU iOS 18_5 like Mac OS X)"
     static let deviceModel = "iPhone17,1"
@@ -23,7 +25,9 @@ struct DemusIOSCapture {
 
 enum YouTubeContextBuilder {
     /// Demus-style IOS /player POST body. Pass harvested session values when available.
-    static func iosPlayerBody(
+    /// `nonisolated`: pure builder over a value-type session, called from the
+    /// InnerTube resolver's off-main context.
+    nonisolated static func iosPlayerBody(
         videoId: String,
         session: YouTubeSessionContext,
         refererVideoId: String? = nil
@@ -32,7 +36,7 @@ enum YouTubeContextBuilder {
         let originalUrl = "https://www.youtube.com\(watchPath)"
         let sigTs = session.signatureTimestamp ?? DemusIOSCapture.signatureTimestamp
 
-        var client: [String: Any] = [
+        let client: [String: Any] = [
             "clientVersion": DemusIOSCapture.clientVersion,
             "clientName": "IOS",
             "userAgent": DemusIOSCapture.userAgent,
@@ -108,7 +112,7 @@ enum YouTubeContextBuilder {
         ]
     }
 
-    private static func adSignalsParams() -> [[String: String]] {
+    nonisolated private static func adSignalsParams() -> [[String: String]] {
         let now = String(Int64(Date().timeIntervalSince1970 * 1000))
         let tz = String(TimeZone.current.secondsFromGMT() / 60)
         return [

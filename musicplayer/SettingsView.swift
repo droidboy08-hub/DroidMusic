@@ -9,6 +9,7 @@ struct SettingsView: View {
 
     @State private var showAllPalettes = false
     private let collapsedPaletteCount = 4
+    @State private var showDiagnostics = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -27,6 +28,9 @@ struct SettingsView: View {
                 .padding(.bottom, 40)
             }
             .scrollIndicators(.hidden)
+        }
+        .sheet(isPresented: $showDiagnostics) {
+            DiagnosticsView().environment(theme)
         }
         .background(theme.palette.bg.ignoresSafeArea())
     }
@@ -318,6 +322,26 @@ struct SettingsView: View {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 12)
                 
+                Divider().padding(.leading, 44)
+
+                Button { showDiagnostics = true } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "waveform.path.ecg")
+                            .font(.system(size: 18))
+                            .foregroundStyle(theme.ink)
+                        Text("PoToken Diagnostics")
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundStyle(theme.ink)
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(theme.ink3)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
+                }
+                .buttonStyle(.plain)
+
                 Divider().padding(.leading, 44)
 
                 Button {

@@ -78,7 +78,7 @@ final class SessionBootstrap: NSObject, WKNavigationDelegate {
     func start() {
         guard !loading, visitorData == nil else { return }
         loading = true
-        print("🟣 [Session] bootstrapping visitorData…")
+        dlog("🟣 [Session] bootstrapping visitorData…")
         webView.load(URLRequest(url: URL(string: "https://music.youtube.com")!))
     }
 
@@ -151,36 +151,49 @@ final class SessionBootstrap: NSObject, WKNavigationDelegate {
         guard poToken == nil else { return }
         let gen = bootstrapGeneration
         Task { [weak self] in
-            let minted = await PoTokenMinter.shared.mint()
+            // Bind the pot to OUR visitorData so it always validates (no mismatch).
+            let minted = await PoTokenMinter.shared.ensureValidToken(visitorData: vd)
             guard let self, let minted,
                   self.bootstrapGeneration == gen   // session not refreshed since
             else { return }
             self.poToken = minted.value
             self.poTokenVisitorData = minted.visitorData
-            let same = minted.visitorData == vd
-            print("🔑 [PoToken] bound to session ✓ (visitorData \(same ? "matches" : "differs"))")
+            dlog("🔑 [PoToken] bound to session ✓ (vd \(vd.prefix(10))…, age \(Int(minted.age))s)")
             self.schedulePoTokenRefresh()
         }
     }
 
-    /// PO tokens go stale, so re-mint every 20 min to keep the ANDROID/MWEB clients
-    /// supplied with a valid token. Reschedules itself; cancelled on `refresh()`.
+    /// Keep the ANDROID/MWEB token warm. `ensureValidToken` only re-mints once the
+    /// cached token ages past its stale threshold, so this loop is cheap on most
+    /// ticks and just refreshes the stored pair. Cancelled on `refresh()`.
     private func schedulePoTokenRefresh() {
         poTokenRefreshTask?.cancel()
         let gen = bootstrapGeneration
         poTokenRefreshTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(20 * 60))
-            guard let self, !Task.isCancelled, self.bootstrapGeneration == gen else { return }
-            print("🔑 [PoToken] refreshing (periodic)…")
-            if let minted = await PoTokenMinter.shared.mint(), self.bootstrapGeneration == gen {
-                self.poToken = minted.value
-                self.poTokenVisitorData = minted.visitorData
-                print("🔑 [PoToken] refreshed ✓")
-            } else {
-                print("🔑 [PoToken] refresh failed ✗")
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(30 * 60))
+                guard let self, !Task.isCancelled, self.bootstrapGeneration == gen,
+                      let vd = self.visitorData else { return }
+                if let minted = await PoTokenMinter.shared.ensureValidToken(visitorData: vd),
+                   self.bootstrapGeneration == gen {
+                    self.poToken = minted.value
+                    self.poTokenVisitorData = minted.visitorData
+                    dlog("🔑 [PoToken] periodic check ✓ (age \(Int(minted.age))s)")
+                }
             }
-            if self.bootstrapGeneration == gen { self.schedulePoTokenRefresh() }
         }
+    }
+
+    /// Force a fresh token right now and adopt it. Used by InnerTube when the
+    /// ANDROID client rejects the current token mid-playback (likely stale).
+    func refreshPoTokenNow() async -> (token: String, visitorData: String)? {
+        guard let vd = visitorData,
+              let minted = await PoTokenMinter.shared.ensureValidToken(visitorData: vd, force: true)
+        else { return nil }
+        poToken = minted.value
+        poTokenVisitorData = minted.visitorData
+        dlog("🔑 [PoToken] force-refreshed ✓ (age \(Int(minted.age))s)")
+        return (minted.value, minted.visitorData)
     }
 
     /// Fire-and-forget: does not block playback or visitorData waiters.
@@ -251,24 +264,24 @@ final class SessionBootstrap: NSObject, WKNavigationDelegate {
                 let pot = self.poToken != nil ? "poToken✓" : "poToken✗"
                 let sts = self.signatureTimestamp.map(String.init) ?? "nil"
                 let cfg = self.coldHashData != nil ? "configInfo✓" : "configInfo✗"
-                print("🟣 [Session] visitorData (\(vd.prefix(12))…) \(pot) STS=\(sts) \(cfg)")
+                dlog("🟣 [Session] visitorData (\(vd.prefix(12))…) \(pot) STS=\(sts) \(cfg)")
                 self.scheduleMWEBWarmupIfNeeded()
                 self.mintPoTokenIfNeeded(visitorData: vd)
             } else {
-                print("🔴 [Session] VISITOR_DATA not found on page")
+                dlog("🔴 [Session] VISITOR_DATA not found on page")
             }
             self.resumeWaiters()
         }
     }
 
     func webView(_ wv: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-        print("🔴 [Session] navigation failed: \(error.localizedDescription)")
+        dlog("🔴 [Session] navigation failed: \(error.localizedDescription)")
         loading = false
         resumeWaiters()
     }
 
     func webView(_ wv: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-        print("🔴 [Session] provisional navigation failed: \(error.localizedDescription)")
+        dlog("🔴 [Session] provisional navigation failed: \(error.localizedDescription)")
         loading = false
         resumeWaiters()
     }
@@ -310,14 +323,14 @@ private enum MWEBSessionWarmup {
                 let host = response.url?.host ?? startURL.host ?? "?"
                 // 204 No Content is the expected CDN connectivity response.
                 if code == 204 {
-                    print("🟣 [Session] MWEB warmup generate_204 → \(code) (\(host))")
+                    dlog("🟣 [Session] MWEB warmup generate_204 → \(code) (\(host))")
                     return
                 }
-                print("🟡 [Session] MWEB warmup \(host) → HTTP \(code), trying next…")
+                dlog("🟡 [Session] MWEB warmup \(host) → HTTP \(code), trying next…")
             } catch {
-                print("🟡 [Session] MWEB warmup \(startURL.host ?? "?") error: \(error.localizedDescription)")
+                dlog("🟡 [Session] MWEB warmup \(startURL.host ?? "?") error: \(error.localizedDescription)")
             }
         }
-        print("🟡 [Session] MWEB warmup: no 204 (non-fatal, playback unchanged)")
+        dlog("🟡 [Session] MWEB warmup: no 204 (non-fatal, playback unchanged)")
     }
 }

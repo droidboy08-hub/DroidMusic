@@ -210,7 +210,7 @@ actor InnerTubeAPI {
             guard status == "OK" else { return nil }
             return MetadataParser.parsePlayerResponse(json)
         } catch {
-            print("🟡 [InnerTube/IOS/metadata] \(error.localizedDescription)")
+            dlog("🟡 [InnerTube/IOS/metadata] \(error.localizedDescription)")
             return nil
         }
     }
@@ -265,46 +265,66 @@ actor InnerTubeAPI {
     ) async throws -> Resolved {
         let order = playbackClientOrder(session: ctx)
 
+        var sessionCtx = ctx   // may adopt a refreshed pot token mid-cascade
         var lastPlayabilityError: String?
         var muxedFallback: (client: InnerTubeClient, resolved: Resolved)?
         var audioFallback: (client: InnerTubeClient, resolved: Resolved)?
 
-        for client in order {
+        enum Outcome { case ideal(Resolved); case fallback(Resolved); case failed }
+
+        // One attempt at a single client. Logs, records playability reasons; the
+        // caller decides whether to keep it, retry, or move on.
+        func attempt(_ client: InnerTubeClient, _ c: YouTubeSessionContext) async -> Outcome {
             let cfg = client.config
-            if cfg.requiresPoToken && ctx.poToken == nil { continue }
-
-            if client.usesGvsPoToken {
-                let bind = ctx.poTokenVisitorData != nil ? "vd=pot" : "vd=session"
-                print("🔑 [InnerTube/\(cfg.clientName)] attempt poToken=\(ctx.poToken != nil ? "✓" : "✗") \(bind)")
-            }
-
             do {
-                let json = try await player(videoId: videoId, session: ctx, client: client)
+                let json = try await player(videoId: videoId, session: c, client: client)
                 let status = nav(json, "playabilityStatus", "status") as? String ?? "?"
-
                 if status != "OK" {
                     let reason = playabilityReason(json) ?? status
-                    print("🟡 [InnerTube/\(cfg.clientName)] playability=\(status) (\(reason))")
-                    if client == .webRemix || client == .tvEmbedded {
-                        lastPlayabilityError = reason
-                    }
-                    continue
+                    dlog("🟡 [InnerTube/\(cfg.clientName)] playability=\(status) (\(reason))")
+                    if client == .webRemix || client == .tvEmbedded { lastPlayabilityError = reason }
+                    return .failed
                 }
-
                 logStreamFormats(json, clientName: cfg.clientName)
-
-                guard let resolved = parseStreamFormats(
-                    json, client: client, quality: quality, poToken: ctx.poToken
-                ) else {
-                    print("🟡 [InnerTube/\(cfg.clientName)] no direct stream url")
-                    continue
+                guard let resolved = parseStreamFormats(json, client: client, quality: quality, poToken: c.poToken) else {
+                    dlog("🟡 [InnerTube/\(cfg.clientName)] no direct stream url")
+                    return .failed
                 }
+                dlog("🟢 [InnerTube/\(cfg.clientName)] picked itag=\(resolved.itag) hasVideo=\(resolved.hasVideo) ratebypass=\(!resolved.needsChunkedLoader)")
+                // Demus target: itag 18 + ratebypass=yes.
+                return (resolved.hasVideo && !resolved.needsChunkedLoader) ? .ideal(resolved) : .fallback(resolved)
+            } catch {
+                dlog("🟡 [InnerTube/\(cfg.clientName)] \(error.localizedDescription)")
+                return .failed
+            }
+        }
 
-                print("🟢 [InnerTube/\(cfg.clientName)] picked itag=\(resolved.itag) hasVideo=\(resolved.hasVideo) ratebypass=\(!resolved.needsChunkedLoader)")
+        for client in order {
+            let cfg = client.config
+            if cfg.requiresPoToken && sessionCtx.poToken == nil { continue }
 
-                // Demus target: itag 18 + ratebypass=yes (MWEB path).
-                if resolved.hasVideo && !resolved.needsChunkedLoader { return resolved }
+            if client.usesGvsPoToken {
+                let bind = sessionCtx.poTokenVisitorData != nil ? "vd=pot" : "vd=session"
+                dlog("🔑 [InnerTube/\(cfg.clientName)] attempt poToken=\(sessionCtx.poToken != nil ? "✓" : "✗") \(bind)")
+            }
 
+            var outcome = await attempt(client, sessionCtx)
+
+            // A pot client that failed with a token attached usually means the token
+            // was rejected (stale/mismatched). Force one fresh mint and retry this
+            // client once with it before falling through to ANDROID_VR.
+            if case .failed = outcome, client.usesGvsPoToken, sessionCtx.poToken != nil {
+                if let fresh = await SessionBootstrap.shared.refreshPoTokenNow() {
+                    sessionCtx = sessionCtx.withPoToken(fresh.token, visitorData: fresh.visitorData)
+                    dlog("🔁 [InnerTube/\(cfg.clientName)] retrying with refreshed poToken")
+                    outcome = await attempt(client, sessionCtx)
+                }
+            }
+
+            switch outcome {
+            case .ideal(let resolved):
+                return resolved
+            case .fallback(let resolved):
                 if resolved.hasVideo {
                     if muxedFallback == nil || !muxedFallback!.resolved.needsChunkedLoader {
                         muxedFallback = (client, resolved)
@@ -314,8 +334,8 @@ actor InnerTubeAPI {
                             || (!resolved.needsChunkedLoader && audioFallback!.resolved.needsChunkedLoader) {
                     audioFallback = (client, resolved)
                 }
-            } catch {
-                print("🟡 [InnerTube/\(cfg.clientName)] \(error.localizedDescription)")
+            case .failed:
+                break
             }
         }
 
@@ -423,7 +443,7 @@ actor InnerTubeAPI {
               let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             let pot = ctx.poToken != nil ? "pot✓" : "pot✗"
             let bind = client.usesGvsPoToken && ctx.poTokenVisitorData != nil ? "vd=pot" : "vd=session"
-            print("🔴 [InnerTube/\(cfg.clientName)] /player HTTP \(code) (\(pot), \(bind), \(data.count) bytes)")
+            dlog("🔴 [InnerTube/\(cfg.clientName)] /player HTTP \(code) (\(pot), \(bind), \(data.count) bytes)")
             throw PlayerError.badResponse
         }
         return json
@@ -513,12 +533,12 @@ actor InnerTubeAPI {
         let progressive = (sd["formats"] as? [[String: Any]]) ?? []
         for f in progressive where (f["itag"] as? Int) == 18 {
             let urlStr = directURL(from: f) ?? ""
-            print("🎬 [InnerTube/\(clientName)] itag=18 ratebypass=\(urlStr.contains("ratebypass=yes")) url=\(!urlStr.isEmpty)")
+            dlog("🎬 [InnerTube/\(clientName)] itag=18 ratebypass=\(urlStr.contains("ratebypass=yes")) url=\(!urlStr.isEmpty)")
         }
         let adaptive = (sd["adaptiveFormats"] as? [[String: Any]]) ?? []
         let audio = adaptive.filter { ($0["mimeType"] as? String)?.hasPrefix("audio") == true }
         guard !audio.isEmpty else {
-            print("🟡 [InnerTube/\(clientName)] no adaptive audio formats")
+            dlog("🟡 [InnerTube/\(clientName)] no adaptive audio formats")
             return
         }
         for f in audio.sorted(by: { ($0["itag"] as? Int ?? 0) < ($1["itag"] as? Int ?? 0) }) {
@@ -527,7 +547,7 @@ actor InnerTubeAPI {
             let rb = urlStr.contains("ratebypass=yes")
             let cipher = f["signatureCipher"] != nil || f["cipher"] != nil
             let br = f["bitrate"] as? Int ?? 0
-            print("🔊 [InnerTube/\(clientName)] audio itag=\(itag) bitrate=\(br) ratebypass=\(rb) cipher=\(cipher) url=\(!urlStr.isEmpty)")
+            dlog("🔊 [InnerTube/\(clientName)] audio itag=\(itag) bitrate=\(br) ratebypass=\(rb) cipher=\(cipher) url=\(!urlStr.isEmpty)")
         }
     }
 
