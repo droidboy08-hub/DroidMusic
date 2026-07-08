@@ -19,13 +19,14 @@ struct ContentView: View {
     // Create playlist sheet state (lifted so the FAB can live above the mini player)
     @State private var showCreatePlaylist = false
     @State private var createPlaylistName = ""
+    @State private var showSpotifyImport = false
 
     var body: some View {
         ZStack {
             tabLayer(.home)      { NavigationStack(path: $homePath) { HomeView() } }
             tabLayer(.search)    { SearchView() }
             tabLayer(.explore)   { ExploreView() }
-            tabLayer(.library)   { NavigationStack(path: $libraryPath) { LibraryView(showCreatePlaylist: $showCreatePlaylist, newPlaylistName: $createPlaylistName) } }
+            tabLayer(.library)   { NavigationStack(path: $libraryPath) { LibraryView() } }
 
             // Hidden WebView that keeps the YouTube session (visitorData + cookies + poToken) warm.
             // Must stay in the view tree for reliable navigation / JS execution.
@@ -93,6 +94,26 @@ struct ContentView: View {
             case .library: libraryPath = NavigationPath()
             default: break
             }
+        }
+        .sheet(isPresented: $showCreatePlaylist) {
+            NewPlaylistSheet(
+                isPresented: $showCreatePlaylist,
+                name: $createPlaylistName,
+                onCreate: {
+                    if player.createPlaylist(name: createPlaylistName) != nil {
+                        Haptics.playlistCreated()
+                        if selectedTab != .library { selectedTab = .library }
+                    }
+                },
+                onSpotify: { showSpotifyImport = true }
+            )
+            .environment(theme)
+            .environment(player)
+        }
+        .sheet(isPresented: $showSpotifyImport) {
+            ImportPlaylistView()
+                .environment(theme)
+                .environment(player)
         }
         .sheet(isPresented: Binding(get: { player.showAddToPlaylist }, set: { player.showAddToPlaylist = $0 })) {
             if let track = player.addToPlaylistTrack {

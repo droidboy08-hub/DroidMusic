@@ -4,9 +4,6 @@ struct LibraryView: View {
     @Environment(ThemeState.self) private var theme
     @Environment(PlayerState.self) private var player
 
-    @Binding var showCreatePlaylist: Bool
-    @Binding var newPlaylistName: String
-
     private let filters = ["Playlists", "Songs", "Albums", "Artists"]
     @State private var activeFilter = "Playlists"
     @State private var showImport = false
@@ -43,9 +40,6 @@ struct LibraryView: View {
         }
         .scrollIndicators(.hidden)
         .background(theme.palette.bg)
-        .sheet(isPresented: $showCreatePlaylist) {
-            createPlaylistSheet
-        }
     }
 
     // MARK: - Filter chip rail
@@ -108,81 +102,6 @@ struct LibraryView: View {
         }
         .padding(.leading, 12)
         .padding(.bottom, 16)
-    }
-
-    // MARK: - Create playlist sheet
-    private var createPlaylistSheet: some View {
-        NavigationStack {
-            VStack(spacing: 24) {
-                // Playlist icon preview
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(theme.palette.surfaceWarm)
-                    .frame(width: 100, height: 100)
-                    .overlay {
-                        Image(systemName: "music.note.list")
-                            .font(.system(size: 40, weight: .light))
-                            .foregroundStyle(theme.ink2)
-                    }
-                    .shadow(color: theme.ink.opacity(0.10), radius: 10, y: 4)
-
-                // Name field
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Playlist name")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(theme.ink3)
-                        .kerning(1.2)
-                        .textCase(.uppercase)
-
-                    TextField("My Playlist", text: $newPlaylistName)
-                        .font(.system(size: 17))
-                        .foregroundStyle(theme.ink)
-                        .tint(theme.accent)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 12)
-                        .background(theme.palette.surface)
-                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .strokeBorder(theme.line, lineWidth: 1))
-                }
-
-                Spacer()
-
-                // Create button
-                Button {
-                    player.createPlaylist(name: newPlaylistName)
-                    activeFilter = "Playlists"
-                    showCreatePlaylist = false
-                } label: {
-                    Text("Create Playlist")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(theme.palette.bg)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 52)
-                        .background(
-                            newPlaylistName.trimmingCharacters(in: .whitespaces).isEmpty
-                                ? theme.ink.opacity(0.25)
-                                : theme.ink,
-                            in: Capsule()
-                        )
-                }
-                .buttonStyle(.plain)
-                .disabled(newPlaylistName.trimmingCharacters(in: .whitespaces).isEmpty)
-            }
-            .padding(24)
-            .background(theme.palette.bg.ignoresSafeArea())
-            .navigationTitle("New Playlist")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { showCreatePlaylist = false }
-                        .foregroundStyle(theme.ink)
-                }
-            }
-        }
-        .environment(theme)
-        .environment(player)
-        .presentationDetents([.medium])
-        .presentationDragIndicator(.visible)
     }
 
     // MARK: - Playlists content (smart tiles + user playlists)
