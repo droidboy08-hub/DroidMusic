@@ -154,6 +154,7 @@ struct AddToPlaylistView: View {
         return Button {
             if !isSelected {
                 player.addToPlaylist(track: track, playlistId: playlist.id)
+                Haptics.addedToPlaylist()
                 dismiss()
             }
         } label: {
@@ -217,7 +218,9 @@ struct AddToPlaylistView: View {
 
     private func createPlaylist() {
         guard canCreatePlaylist else { return }
-        player.createPlaylist(name: newPlaylistName, adding: track)
+        if player.createPlaylist(name: newPlaylistName, adding: track) != nil {
+            Haptics.playlistCreated()
+        }
         dismiss()
     }
 

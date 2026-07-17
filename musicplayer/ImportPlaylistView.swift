@@ -14,6 +14,13 @@ struct ImportPlaylistView: View {
     @State private var playlistName  = ""
     @State private var coverURL:     String?         = nil
     @State private var useBestGuess  = false
+    @State private var importDone    = false   // drives the card's final "filled" frame
+    @State private var showPlaylistPicker = false
+
+    // Source-card carousel
+    @State private var activeCard = 0
+    @State private var cardDrag: CGFloat = 0
+    @State private var showHint = true
 
     private let importer = PlaylistImporter()
 
@@ -23,9 +30,8 @@ struct ImportPlaylistView: View {
         NavigationStack {
             Group {
                 switch phase {
-                case .idle:    idleView
-                case .running: progressView
-                case .summary: summaryView
+                case .idle, .running: importScaffold
+                case .summary:        summaryView
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -50,91 +56,132 @@ struct ImportPlaylistView: View {
         .environment(player)
     }
 
-    // MARK: Idle — URL paste
-    private var idleView: some View {
-        ScrollView {
-        VStack(spacing: 28) {
-            Spacer()
+    // MARK: Idle / running — source carousel + paste form
+    private var importScaffold: some View {
+        VStack(spacing: 0) {
+            carousel
+                .padding(.top, 12)
 
-            Image(systemName: "link.badge.plus")
-                .font(.system(size: 52, weight: .thin))
-                .foregroundStyle(theme.ink2)
+            Text("Swipe to switch")
+                .font(.system(size: 12, weight: .medium))
+                .kerning(0.5)
+                .foregroundStyle(theme.ink3)
+                .opacity(showHint && phase == .idle ? 1 : 0)
+                .padding(.top, 16)
 
-            VStack(spacing: 8) {
-                Text("Paste a playlist link")
+            Spacer(minLength: 12)
+
+            VStack(spacing: 0) {
+                Text("Paste The Playlist Link")
                     .font(.system(size: 20, weight: .bold))
                     .foregroundStyle(theme.ink)
-                Text("Supports YouTube, YouTube Music,\nSpotify playlists and albums")
+                    .padding(.bottom, 8)
+                Text("Enter a link to any Spotify, YouTube,\nor Music playlist to import it.")
                     .font(.system(size: 14))
                     .foregroundStyle(theme.ink3)
                     .multilineTextAlignment(.center)
-            }
+                    .padding(.bottom, 24)
 
-            VStack(spacing: 12) {
-                TextField("https://open.spotify.com/album/... or playlist?list=...", text: $urlText, axis: .vertical)
-                    .font(.system(size: 14))
+                TextField("Playlist Link", text: $urlText)
+                    .font(.system(size: 16))
                     .foregroundStyle(theme.ink)
                     .tint(theme.accent)
-                    .padding(14)
-                    .background(theme.palette.surface)
-                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .strokeBorder(theme.line, lineWidth: 1))
-                    .lineLimit(3)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .disabled(phase == .running)
+                    .padding(16)
+                    .background(theme.palette.surfaceWarm, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).strokeBorder(theme.line, lineWidth: 1))
 
-                TextField("Playlist name (optional)", text: $playlistName)
-                    .font(.system(size: 14))
-                    .foregroundStyle(theme.ink)
-                    .tint(theme.accent)
-                    .padding(14)
-                    .background(theme.palette.surface)
-                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .strokeBorder(theme.line, lineWidth: 1))
+                Button { startImport() } label: {
+                    Text("Import")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(canImport ? theme.palette.bg : theme.ink.opacity(0.35))
+                        .frame(maxWidth: .infinity).frame(height: 56)
+                        .background(canImport ? theme.ink : theme.ink.opacity(0.12), in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(!canImport || phase == .running)
+                .padding(.top, 20)
             }
             .padding(.horizontal, 24)
-
-            Spacer()
-
-            Button { startImport() } label: {
-                Text("Import")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(theme.palette.bg)
-                    .frame(maxWidth: .infinity).frame(height: 54)
-                    .background(
-                        urlText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                            ? theme.ink.opacity(0.25) : theme.ink,
-                        in: Capsule()
-                    )
-            }
-            .buttonStyle(.plain)
-            .disabled(urlText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            .padding(.horizontal, 24)
-            .padding(.bottom, 36)
-        }
-        .scrollDismissesKeyboard(.interactively)
+            .padding(.bottom, 28)
         }
     }
 
-    // MARK: Progress
-    private var progressView: some View {
-        VStack(spacing: 24) {
-            Spacer()
-            ProgressView()
-                .controlSize(.large)
-                .tint(theme.accent)
-            VStack(spacing: 6) {
-                Text(progress.phase)
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(theme.ink)
-                if progress.total > 0 {
-                    Text("\(progress.current) / \(progress.total)")
-                        .font(.system(size: 13).monospacedDigit())
-                        .foregroundStyle(theme.ink3)
-                }
+    private var canImport: Bool {
+        !urlText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    // MARK: Carousel
+    private var carousel: some View {
+        ZStack {
+            ForEach(ImportSource.allCases) { src in
+                let i = src.rawValue
+                let isActive = (i == activeCard)
+                ImportSourceCard(
+                    source: src,
+                    progress: isActive ? ringProgress : 0,
+                    isDone: importDone && isActive,
+                    counter: (isActive && phase == .running && progress.current > 0)
+                        ? "\(progress.current) song\(progress.current == 1 ? "" : "s")" : "",
+                    cardBG: theme.palette.surface,
+                    ink: theme.ink,
+                    ink3: theme.ink3
+                )
+                .scaleEffect(isActive ? activeScale : 0.82)
+                .opacity(isActive ? activeOpacity : 0.5)
+                .offset(x: cardX(i, isActive))
+                .zIndex(isActive ? 1 : 0)
             }
-            Spacer()
         }
+        .frame(height: 214)
+        .frame(maxWidth: .infinity)
+        .contentShape(Rectangle())
+        .gesture(phase == .running ? nil : dragGesture)
+        .animation(.spring(response: 0.5, dampingFraction: 0.78), value: activeCard)
+    }
+
+    private var dragGesture: some Gesture {
+        DragGesture()
+            .onChanged { cardDrag = $0.translation.width }
+            .onEnded { v in
+                let dx = v.translation.width
+                let n = ImportSource.allCases.count
+                withAnimation(.spring(response: 0.5, dampingFraction: 0.78)) {
+                    if dx < -40 { activeCard = (activeCard + 1) % n }
+                    else if dx > 40 { activeCard = (activeCard - 1 + n) % n }
+                    cardDrag = 0
+                }
+                showHint = false
+            }
+    }
+
+    /// -1 (left) / 0 (active) / +1 (right), wrapping for 3 cards.
+    private func cardOffset(_ i: Int) -> Int {
+        let n = ImportSource.allCases.count
+        let diff = i - activeCard
+        if diff == 0 { return 0 }
+        if diff == 1 || diff == -(n - 1) { return 1 }
+        return -1
+    }
+
+    private func cardX(_ i: Int, _ isActive: Bool) -> CGFloat {
+        if isActive { return cardDrag }
+        let off = cardOffset(i)
+        // Neighbour subtly pulls in when the drag heads its way.
+        let pull = min(1, abs(cardDrag) / 140)
+        let relevant = (cardDrag < 0 && off == 1) || (cardDrag > 0 && off == -1)
+        return CGFloat(off) * 70 * (1 - (relevant ? pull : 0) * 0.5)
+    }
+
+    private var activeScale: CGFloat { max(0.88, 1 - abs(cardDrag) / 500) }
+    private var activeOpacity: Double { max(0.4, 1 - Double(abs(cardDrag)) / 260) }
+
+    private var ringProgress: Double {
+        if importDone { return 1 }
+        guard phase == .running, progress.total > 0 else { return 0 }
+        return min(1, Double(progress.current) / Double(progress.total))
     }
 
     // MARK: Summary
@@ -232,9 +279,99 @@ struct ImportPlaylistView: View {
                 .buttonStyle(.plain)
                 .disabled(resultTracks.isEmpty)
                 .padding(.horizontal, 24)
+                .padding(.bottom, 12)
+
+                // Add the imported tracks into an existing library playlist instead.
+                Button { showPlaylistPicker = true } label: {
+                    Text("Add to Playlist")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(theme.ink)
+                        .frame(maxWidth: .infinity).frame(height: 54)
+                        .background(theme.palette.surface, in: Capsule())
+                        .overlay(Capsule().strokeBorder(theme.line, lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+                .disabled(resultTracks.isEmpty)
+                .padding(.horizontal, 24)
                 .padding(.bottom, 40)
             }
         }
+        .sheet(isPresented: $showPlaylistPicker) { playlistPicker }
+    }
+
+    // MARK: Playlist picker (add imported tracks to a library playlist)
+    private var playlistPicker: some View {
+        NavigationStack {
+            Group {
+                if player.userPlaylists.isEmpty {
+                    VStack(spacing: 10) {
+                        Image(systemName: "music.note.list")
+                            .font(.system(size: 40, weight: .light))
+                            .foregroundStyle(theme.ink3)
+                        Text("No playlists in your library yet")
+                            .font(.system(size: 14))
+                            .foregroundStyle(theme.ink3)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    ScrollView {
+                        LazyVStack(spacing: 0) {
+                            ForEach(player.userPlaylists) { pl in
+                                Button { addImported(to: pl.id) } label: { pickerRow(pl) }
+                                    .buttonStyle(.plain)
+                            }
+                        }
+                        .padding(.horizontal, 20)
+                        .padding(.top, 8)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(theme.palette.bg.ignoresSafeArea())
+            .navigationTitle("Add to Playlist")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { showPlaylistPicker = false }.foregroundStyle(theme.ink)
+                }
+            }
+        }
+        .environment(theme)
+        .environment(player)
+        .presentationDetents([.medium, .large])
+    }
+
+    private func pickerRow(_ pl: Playlist) -> some View {
+        HStack(spacing: 12) {
+            ThumbnailView(url: pl.coverURL ?? pl.tracks.first?.thumbnailURL,
+                          seed: pl.tracks.first?.seed ?? 0, cornerRadius: 8)
+                .frame(width: 44, height: 44)
+                .overlay {
+                    if pl.tracks.isEmpty {
+                        Image(systemName: "music.note.list")
+                            .font(.system(size: 18, weight: .light))
+                            .foregroundStyle(theme.ink2)
+                    }
+                }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(pl.title).font(.system(size: 15, weight: .semibold)).foregroundStyle(theme.ink)
+                Text("\(pl.tracks.count) songs").font(.system(size: 12)).foregroundStyle(theme.ink3)
+            }
+            Spacer()
+            Image(systemName: "plus.circle").font(.system(size: 18)).foregroundStyle(theme.ink3)
+        }
+        .padding(.vertical, 10)
+        .contentShape(Rectangle())
+    }
+
+    /// Add every imported track into the chosen playlist, then close the flow.
+    private func addImported(to playlistId: UUID) {
+        for meta in resultTracks {
+            player.addToPlaylist(track: meta.asTrack(), playlistId: playlistId)
+        }
+        Haptics.addedToPlaylist()
+        showPlaylistPicker = false
+        dismiss()
     }
 
     private func sectionHeader(_ title: String) -> some View {
@@ -251,11 +388,21 @@ struct ImportPlaylistView: View {
 
     private func startImport() {
         let raw = urlText.trimmingCharacters(in: .whitespacesAndNewlines)
+        importDone = false
+        progress = ImportProgress(phase: "", current: 0, total: 0)
         phase = .running
 
         Task {
             do {
                 let source = try PlaylistSource.detect(raw)
+                await MainActor.run {
+                    withAnimation(.spring(response: 0.5, dampingFraction: 0.78)) {
+                        switch source {
+                        case .youtube:  activeCard = ImportSource.youtube.rawValue
+                        default:        activeCard = ImportSource.spotify.rawValue
+                        }
+                    }
+                }
                 switch source {
                 case .youtube(let id):
                     let tracks = try await importer.importYouTube(playlistId: id) { p in
@@ -264,7 +411,7 @@ struct ImportPlaylistView: View {
                     await MainActor.run {
                         self.resultTracks = tracks
                         self.missed = []
-                        self.phase = .summary
+                        self.completeRunning()
                     }
 
                 case .spotifyPlaylist(let id):
@@ -281,7 +428,7 @@ struct ImportPlaylistView: View {
                            let name, !name.isEmpty {
                             self.playlistName = name
                         }
-                        self.phase = .summary
+                        self.completeRunning()
                     }
 
                 case .spotifyAlbum(let id):
@@ -296,7 +443,7 @@ struct ImportPlaylistView: View {
                            let name, !name.isEmpty {
                             self.playlistName = name
                         }
-                        self.phase = .summary
+                        self.completeRunning()
                     }
                 }
             } catch {
@@ -305,6 +452,17 @@ struct ImportPlaylistView: View {
                     self.phase = .idle
                 }
             }
+        }
+    }
+
+    /// Import finished — let the badge settle into its filled last frame for a
+    /// beat before revealing the summary.
+    @MainActor private func completeRunning() {
+        withAnimation { importDone = true }
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            phase = .summary
+            importDone = false
         }
     }
 

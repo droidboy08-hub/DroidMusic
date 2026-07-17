@@ -22,7 +22,7 @@ struct NewPlaylistSheet: View {
         VStack(spacing: 0) {
             header
             heroIcon
-                .padding(.bottom, 22)
+                .padding(.bottom, 12)
             nameField
                 .padding(.bottom, 16)
             createButton
@@ -34,7 +34,7 @@ struct NewPlaylistSheet: View {
         }
         .padding(.horizontal, 20)
         .padding(.top, 34)   // space below the drag indicator before the header row
-        .padding(.bottom, 20)
+        .padding(.bottom, 32)   // space below the Spotify button
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(theme.palette.bg.ignoresSafeArea())
         .presentationDetents([.height(420)])
@@ -170,37 +170,5 @@ private struct PressReportingStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .onChange(of: configuration.isPressed) { _, p in pressed = p }
-    }
-}
-
-/// The Spotify glyph: a filled disc with three upward-bowing sound-wave bars.
-private struct SpotifyMark: View {
-    let tint: Color
-    let bar: Color
-
-    var body: some View {
-        GeometryReader { geo in
-            let s = min(geo.size.width, geo.size.height)
-            let lw = s * 0.085
-            ZStack {
-                Circle().fill(tint)
-                arc(size: s, y: 0.40, halfWidth: 0.30, rise: 0.11, lineWidth: lw)
-                arc(size: s, y: 0.545, halfWidth: 0.245, rise: 0.095, lineWidth: lw)
-                arc(size: s, y: 0.675, halfWidth: 0.175, rise: 0.075, lineWidth: lw)
-            }
-            .frame(width: s, height: s)
-        }
-    }
-
-    private func arc(size s: CGFloat, y: CGFloat, halfWidth: CGFloat, rise: CGFloat, lineWidth lw: CGFloat) -> some View {
-        Path { p in
-            let cx = s / 2
-            let hw = s * halfWidth
-            let yy = s * y
-            p.move(to: CGPoint(x: cx - hw, y: yy))
-            p.addQuadCurve(to: CGPoint(x: cx + hw, y: yy),
-                           control: CGPoint(x: cx, y: yy - s * rise))
-        }
-        .stroke(bar, style: StrokeStyle(lineWidth: lw, lineCap: .round))
     }
 }

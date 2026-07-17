@@ -30,4 +30,19 @@ enum Haptics {
     static func playlistCreated() {
         impact(.medium)
     }
+
+    /// An item was chosen from the kebab (track ellipsis) menu — a light tap.
+    static func menuSelection() {
+        impact(.light)
+    }
+
+    /// The like button was toggled — a light tap.
+    static func likeToggled() {
+        impact(.light)
+    }
+
+    /// A song was added into a playlist — a light tap.
+    static func addedToPlaylist() {
+        impact(.light)
+    }
 }

@@ -292,6 +292,7 @@ struct MiniPlayerView: View {
                 HStack(spacing: 6) {
                     miniActionBtn(icon: "text.badge.plus", action: onAddToPlaylist)
                     Button {
+                        Haptics.likeToggled()
                         onLike?()
                     } label: {
                         Image(systemName: liked ? "heart.fill" : "heart")
@@ -382,43 +383,25 @@ struct TrackMenu: View {
 
     var body: some View {
         Menu {
-            Button {
+            menuButton("Play Next", "text.line.first.and.arrowtriangle.forward") {
                 player.playNext(track: track)
-            } label: {
-                Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward")
             }
-
-            Button {
+            menuButton("Add to Queue", "text.append") {
                 player.addToQueue(track: track)
-            } label: {
-                Label("Add to Queue", systemImage: "text.append")
             }
-
-            Button {
+            menuButton("Add to Playlist", "text.badge.plus") {
                 player.presentAddToPlaylist(for: track)
-            } label: {
-                Label("Add to Playlist", systemImage: "text.badge.plus")
             }
 
             if player.isLiked(track: track) {
-                Button {
-                    player.toggleLike(track: track)
-                } label: {
-                    Label("Unlike", systemImage: "heart.slash")
-                }
+                menuButton("Unlike", "heart.slash") { player.toggleLike(track: track) }
             } else {
-                Button {
-                    player.toggleLike(track: track)
-                } label: {
-                    Label("Like", systemImage: "heart")
-                }
+                menuButton("Like", "heart") { player.toggleLike(track: track) }
             }
 
             if let pl = playlist, player.userPlaylists.contains(where: { $0.id == pl.id }) {
-                Button(role: .destructive) {
+                menuButton("Remove from this Playlist", "trash", role: .destructive) {
                     player.removeFromPlaylist(track: track, playlistId: pl.id)
-                } label: {
-                    Label("Remove from this Playlist", systemImage: "trash")
                 }
             }
         } label: {
@@ -428,6 +411,19 @@ struct TrackMenu: View {
                 .frame(width: 32, height: 32)
         }
         .buttonStyle(.plain)
+    }
+
+    /// One kebab item — plays a light tap, then runs its action. Routing every
+    /// item through here means anything picked from the menu buzzes.
+    private func menuButton(_ title: String, _ systemImage: String,
+                            role: ButtonRole? = nil,
+                            action: @escaping () -> Void) -> some View {
+        Button(role: role) {
+            Haptics.menuSelection()
+            action()
+        } label: {
+            Label(title, systemImage: systemImage)
+        }
     }
 }
 
