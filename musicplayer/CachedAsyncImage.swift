@@ -46,6 +46,10 @@ nonisolated private func downsampledImage(from data: Data, maxPixel: CGFloat) ->
 struct CachedAsyncImage<Content: View, Placeholder: View>: View {
     private let url: URL?
     private let targetSize: CGSize?
+    /// Keep the last decoded image on screen while a new URL loads, instead of
+    /// dropping to the placeholder on a cache miss. Used by the mini player so a
+    /// swipe-triggered cover change never flashes the procedural placeholder.
+    private let holdWhileLoading: Bool
     private let content: (Image) -> Content
     private let placeholder: () -> Placeholder
 
@@ -54,10 +58,12 @@ struct CachedAsyncImage<Content: View, Placeholder: View>: View {
 
     init(url: URL?,
          targetSize: CGSize? = nil,
+         holdWhileLoading: Bool = false,
          @ViewBuilder content: @escaping (Image) -> Content,
          @ViewBuilder placeholder: @escaping () -> Placeholder) {
         self.url = url
         self.targetSize = targetSize
+        self.holdWhileLoading = holdWhileLoading
         self.content = content
         self.placeholder = placeholder
     }
@@ -107,7 +113,9 @@ struct CachedAsyncImage<Content: View, Placeholder: View>: View {
 
         // Cache miss → show the placeholder while we fetch + decode off the main
         // actor (so fast scrolling never stalls on network or image decoding).
-        uiImage = nil
+        // With holdWhileLoading we keep the current image up instead, so the
+        // swap is old-cover → new-cover rather than a placeholder flash.
+        if !holdWhileLoading { uiImage = nil }
         let image = await fetchAndDecode(url: url, maxPixel: maxPixelDimension)
         guard let image, !Task.isCancelled else { return }
 

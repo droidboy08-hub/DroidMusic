@@ -41,25 +41,14 @@ struct ContentView: View {
                 if theme.showMiniPlayer, let track = player.currentTrack {
                     MiniPlayerView(
                         track: track,
-                        playing: player.isPlaying,
-                        isLoading: player.isLoading,
-                        errorMessage: player.errorMessage,
-                        liked: player.liked,
                         onTap: { player.showNowPlaying = true },
-                        onToggle: { player.togglePlay() },
-                        onLike: { player.toggleLike() },
-                        onAddToPlaylist: {
-                            if let track = player.currentTrack {
-                                player.presentAddToPlaylist(for: track)
-                            }
+                        onNext: {
+                            guard player.canPlayNextTrack else { return }
+                            player.playNextTrack()
                         },
                         onPrevious: {
                             guard player.canPlayPreviousTrack else { return }
                             player.playPreviousTrack()
-                        },
-                        onNext: {
-                            guard player.canPlayNextTrack else { return }
-                            player.playNextTrack()
                         }
                     )
                 }
@@ -144,6 +133,8 @@ struct ContentView: View {
                     .allowsHitTesting(player.showAccount)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // Springy grow-from-the-icon. The box scales empty; AccountView fades
+            // its content in near the end so the scale stays smooth.
             .scaleEffect(player.showAccount ? 1 : 0.01, anchor: .accountIcon)
             .opacity(player.showAccount ? 1 : 0)
         }

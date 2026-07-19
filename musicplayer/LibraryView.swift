@@ -5,9 +5,11 @@ struct LibraryView: View {
     @Environment(PlayerState.self) private var player
 
     private let filters = ["Playlists", "Songs", "Albums", "Artists"]
-    @State private var activeFilter = "Playlists"
+    // Remembers the last-opened tab (persists across launches) so it's the default.
+    @AppStorage("libraryActiveFilter") private var activeFilter = "Playlists"
     @State private var showImport = false
     @State private var isSyncing = false
+    @State private var searchText = ""
 
     var body: some View {
         ScrollView {
@@ -26,6 +28,9 @@ struct LibraryView: View {
                     isSyncing: isSyncing
                 )
                 filterChips
+                if activeFilter == "Playlists" || activeFilter == "Songs" {
+                    searchBar
+                }
                 sortRow
 
                 switch activeFilter {
@@ -48,6 +53,7 @@ struct LibraryView: View {
             HStack(spacing: 8) {
                 ForEach(filters, id: \.self) { f in
                     Button {
+                        searchText = ""
                         withAnimation(.spring(duration: 0.22)) { activeFilter = f }
                     } label: {
                         Text(f)
@@ -68,6 +74,50 @@ struct LibraryView: View {
             }
             .padding(.horizontal, 22)
             .padding(.bottom, 14)
+        }
+    }
+
+    // MARK: - Search
+    private var searchBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 14))
+                .foregroundStyle(theme.ink3)
+            TextField(activeFilter == "Songs" ? "Search songs" : "Search playlists", text: $searchText)
+                .font(.system(size: 15))
+                .foregroundStyle(theme.ink)
+                .tint(theme.accent)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+            if !searchText.isEmpty {
+                Button { searchText = "" } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 15))
+                        .foregroundStyle(theme.ink3)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(theme.palette.surfaceWarm, in: Capsule())
+        .padding(.horizontal, 22)
+        .padding(.bottom, 12)
+    }
+
+    private var isSearching: Bool { !searchText.trimmingCharacters(in: .whitespaces).isEmpty }
+
+    private var filteredPlaylists: [Playlist] {
+        let q = searchText.trimmingCharacters(in: .whitespaces)
+        guard !q.isEmpty else { return player.userPlaylists }
+        return player.userPlaylists.filter { $0.title.localizedCaseInsensitiveContains(q) }
+    }
+
+    private var filteredSongs: [Track] {
+        let q = searchText.trimmingCharacters(in: .whitespaces)
+        guard !q.isEmpty else { return player.likedTracks }
+        return player.likedTracks.filter {
+            $0.title.localizedCaseInsensitiveContains(q) || $0.artist.localizedCaseInsensitiveContains(q)
         }
     }
 
@@ -107,52 +157,73 @@ struct LibraryView: View {
     // MARK: - Playlists content (smart tiles + user playlists)
     private var playlistsContent: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Smart collection tiles
-            LazyVGrid(
-                columns: [GridItem(.flexible(), spacing: 14), GridItem(.flexible(), spacing: 14)],
-                spacing: 14
-            ) {
-                NavigationLink {
-                    PlaylistDetailView(playlist: Playlist(title: "Liked Songs", author: "You", tracks: player.likedTracks))
-                } label: {
-                    libraryTile(label: "Liked", icon: "heart.fill", count: "\(player.likedTracks.count) tracks")
+            // Smart collection tiles (hidden while searching to focus on results)
+            if !isSearching {
+                LazyVGrid(
+                    columns: [GridItem(.flexible(), spacing: 14), GridItem(.flexible(), spacing: 14)],
+                    spacing: 14
+                ) {
+                    NavigationLink {
+                        PlaylistDetailView(playlist: Playlist(title: "Liked Songs", author: "You", tracks: player.likedTracks))
+                    } label: {
+                        libraryTile(label: "Liked", icon: "heart.fill", count: "\(player.likedTracks.count) tracks")
+                    }
+                    .buttonStyle(.plain)
+
+                    Button { showImport = true } label: {
+                        libraryTile(label: "Import", icon: "arrow.down.circle", count: "0 tracks")
+                    }
+                    .buttonStyle(.plain)
+                    .sheet(isPresented: $showImport) {
+                        ImportPlaylistView()
+                            .environment(theme)
+                            .environment(player)
+                    }
                 }
-                .buttonStyle(.plain)
-                
-                Button { showImport = true } label: {
-                    libraryTile(label: "Import", icon: "arrow.down.circle", count: "0 tracks")
-                }
-                .buttonStyle(.plain)
-                .sheet(isPresented: $showImport) {
-                    ImportPlaylistView()
-                        .environment(theme)
-                        .environment(player)
-                }
+                .padding(.horizontal, 22)
             }
-            .padding(.horizontal, 22)
 
             // User-created playlists
-            if !player.userPlaylists.isEmpty {
+            let playlists = filteredPlaylists
+            if !playlists.isEmpty {
                 Text("My Playlists")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(theme.ink3)
                     .kerning(1.2)
                     .textCase(.uppercase)
                     .padding(.horizontal, 22)
-                    .padding(.top, 28)
+                    .padding(.top, isSearching ? 8 : 28)
                     .padding(.bottom, 10)
 
                 LazyVStack(spacing: 0) {
-                    ForEach(Array(player.userPlaylists.enumerated()), id: \.element.id) { idx, pl in
+                    ForEach(Array(playlists.enumerated()), id: \.element.id) { idx, pl in
                         NavigationLink {
                             PlaylistDetailView(playlist: pl)
                         } label: {
-                            userPlaylistRow(pl, isLast: idx == player.userPlaylists.count - 1)
+                            userPlaylistRow(pl, isLast: idx == playlists.count - 1)
                         }
                         .buttonStyle(.plain)
+                        .contextMenu {
+                            let isHidden = player.hiddenHomeCardIds.contains(pl.id)
+                            Button {
+                                Haptics.menuSelection()
+                                if isHidden {
+                                    player.hiddenHomeCardIds.remove(pl.id)
+                                    player.hiddenHomeSongIds.remove(pl.id)
+                                } else {
+                                    player.hiddenHomeCardIds.insert(pl.id)
+                                    player.hiddenHomeSongIds.insert(pl.id)
+                                }
+                            } label: {
+                                Label(isHidden ? "Show in Home" : "Hide from Home",
+                                      systemImage: isHidden ? "house" : "house.slash")
+                            }
+                        }
                     }
                 }
                 .padding(.horizontal, 22)
+            } else if isSearching {
+                emptyState(icon: "magnifyingglass", message: "No playlists match “\(searchText)”")
             }
         }
     }
@@ -216,12 +287,14 @@ struct LibraryView: View {
     // MARK: - Songs content (list rows)
     private var songsContent: some View {
         Group {
-            if player.likedTracks.isEmpty {
-                emptyState(icon: "music.note", message: "No songs yet")
+            let songs = filteredSongs
+            if songs.isEmpty {
+                emptyState(icon: isSearching ? "magnifyingglass" : "music.note",
+                           message: isSearching ? "No songs match “\(searchText)”" : "No songs yet")
             } else {
                 LazyVStack(spacing: 0) {
-                    ForEach(Array(player.likedTracks.enumerated()), id: \.element.id) { idx, track in
-                        songRow(track: track, isLast: idx == player.likedTracks.count - 1)
+                    ForEach(Array(songs.enumerated()), id: \.element.id) { idx, track in
+                        songRow(track: track, isLast: idx == songs.count - 1)
                     }
                 }
                 .padding(.horizontal, 22)

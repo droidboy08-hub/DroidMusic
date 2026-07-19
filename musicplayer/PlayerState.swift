@@ -89,12 +89,24 @@ final class PlayerState {
     var userPlaylists: [Playlist] = [] {
         didSet { PersistenceStore.save(userPlaylists, for: .userPlaylists) }
     }
+    /// Playlists whose card is hidden from the Home rail (Home long-press → "Hide").
+    var hiddenHomeCardIds: Set<UUID> = [] {
+        didSet { PersistenceStore.save(hiddenHomeCardIds, for: .hiddenHomeCardIds) }
+    }
+    /// Playlists whose songs are hidden from Home's "From your library" list
+    /// (Home long-press → "Hide" or "Hide Songs").
+    var hiddenHomeSongIds: Set<UUID> = [] {
+        didSet { PersistenceStore.save(hiddenHomeSongIds, for: .hiddenHomeSongIds) }
+    }
     var likedTracks: [Track] = [] {
         didSet { PersistenceStore.save(likedTracks, for: .likedTracks) }
     }
     var recentSearches: [String] = [] {
         didSet { PersistenceStore.save(recentSearches, for: .recentSearches) }
     }
+    /// A search query requested from elsewhere (e.g. Home mood/recent chips). The
+    /// Search tab picks this up, runs it, and clears it. Transient (not persisted).
+    var pendingSearch: String? = nil
 
     /// Tracks played specifically while browsing/playing from the Explore tab.
     /// Used only to power Explore-tab recommendations (scoped per user request).
@@ -125,6 +137,8 @@ final class PlayerState {
         if let v = PersistenceStore.load(.exploreHistory, as: [Track].self) { exploreHistory = v }
         if let v = PersistenceStore.load(.exploreRecommendations, as: [Track].self) { exploreRecommendations = v }
         if let v = PersistenceStore.load(.recentPlaylistIDs, as: [UUID].self) { recentPlaylistIDs = v }
+        if let v = PersistenceStore.load(.hiddenHomeCardIds, as: Set<UUID>.self) { hiddenHomeCardIds = v }
+        if let v = PersistenceStore.load(.hiddenHomeSongIds, as: Set<UUID>.self) { hiddenHomeSongIds = v }
     }
 
     @discardableResult

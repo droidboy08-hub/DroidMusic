@@ -12,6 +12,8 @@ enum PersistenceKey: String {
     case exploreHistory
     case exploreRecommendations
     case recentPlaylistIDs
+    case hiddenHomeCardIds
+    case hiddenHomeSongIds
 
     // ThemeState
     case paletteIndex
@@ -31,6 +33,7 @@ enum PersistenceKey: String {
     case wifiOnly
     case animations
     case lyrics
+    case adaptiveMiniPlayer
 }
 
 // MARK: - Codable-backed UserDefaults facade

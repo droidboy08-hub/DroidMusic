@@ -128,6 +128,7 @@ struct SettingsView: View {
             displayFontRow
             tabIndicatorRow
             miniPlayerRow
+            adaptiveMiniPlayerRow
         }
     }
 
@@ -283,7 +284,15 @@ struct SettingsView: View {
         SettingToggleRow(
             label: "Show mini player",
             sub: "When music is playing",
-            value: Binding(get: { theme.showMiniPlayer }, set: { theme.showMiniPlayer = $0 }),
+            value: Binding(get: { theme.showMiniPlayer }, set: { theme.showMiniPlayer = $0 })
+        )
+    }
+
+    private var adaptiveMiniPlayerRow: some View {
+        SettingToggleRow(
+            label: "Adaptive mini player",
+            sub: "Experimental",
+            value: Bindable(settings).adaptiveMiniPlayer,
             isLast: true
         )
     }

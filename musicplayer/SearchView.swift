@@ -85,9 +85,10 @@ struct SearchView: View {
                 guard !Task.isCancelled else { return }
                 do {
                     let tracks = try await DemusNetwork.shared.search(query: newValue, source: source)
+                    let ranked = SearchRanking.rank(tracks, query: newValue)
                     await MainActor.run {
                         self.player.recordSearch(newValue)
-                        self.results = tracks
+                        self.results = ranked
                         self.isSearching = false
                     }
                 } catch {
@@ -96,6 +97,18 @@ struct SearchView: View {
                         self.isSearching = false
                     }
                 }
+            }
+        }
+        .onChange(of: player.pendingSearch) { _, term in
+            if let term, !term.isEmpty {
+                query = term
+                player.pendingSearch = nil
+            }
+        }
+        .onAppear {
+            if let term = player.pendingSearch, !term.isEmpty {
+                query = term
+                player.pendingSearch = nil
             }
         }
     }

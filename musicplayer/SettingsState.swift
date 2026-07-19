@@ -58,6 +58,12 @@ final class SettingsState {
         didSet { PersistenceStore.save(lyrics, for: .lyrics) }
     }
 
+    // Adaptive (isolated-buttons) mini player — experimental. Toggle only for
+    // now; not wired to any behavior yet.
+    var adaptiveMiniPlayer: Bool = true {
+        didSet { PersistenceStore.save(adaptiveMiniPlayer, for: .adaptiveMiniPlayer) }
+    }
+
     init() {
         if let v = PersistenceStore.load(.searchSource, as: SearchSource.self) { searchSource = v }
         if let v = PersistenceStore.load(.streamingQuality, as: StreamingQuality.self) {
@@ -74,5 +80,6 @@ final class SettingsState {
         if appTheme == "Black" { appTheme = "System" }   // migrate old saved value
         if let v = PersistenceStore.load(.animations, as: Bool.self) { animations = v }
         if let v = PersistenceStore.load(.lyrics, as: Bool.self) { lyrics = v }
+        if let v = PersistenceStore.load(.adaptiveMiniPlayer, as: Bool.self) { adaptiveMiniPlayer = v }
     }
 }

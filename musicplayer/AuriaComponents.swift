@@ -175,7 +175,8 @@ struct AppBarView: View {
 
 // MARK: - Mini player progress ring (isolated leaf)
 // Reads player.playback.progress from the environment here only — ContentView
-// and MiniPlayerView never touch playback, so progress ticks don't re-render tabs.
+// and MiniPlayerView never touch playback, so progress ticks don't re-render
+// tabs. Like Metrolist's drawWithContent arc, it just tracks live progress.
 private struct MiniProgressRing: View {
     @Environment(PlayerState.self) private var player
     @Environment(ThemeState.self) private var theme
@@ -198,113 +199,157 @@ private struct MiniProgressRing: View {
     }
 }
 
+// MARK: - Isolated mini player buttons (Metrolist pattern)
+// Each of these owns its own playback / like observation, so the parent pill
+// re-renders ONLY when the track changes — playback ticks and like toggles stay
+// contained to the single leaf that reads them, never touching the swipe.
+
+// Play/pause — the whole cover toggles; observes only `isPlaying`.
+struct MiniPlayPauseButton: View {
+    let track: Track
+    @Environment(PlayerState.self) private var player
+    @Environment(ThemeState.self) private var theme
+
+    var body: some View {
+        Button {
+            player.togglePlay()
+        } label: {
+            ZStack {
+                ThumbnailView(url: track.thumbnailURL, seed: track.seed, cornerRadius: 999)
+                    .frame(width: 36, height: 36)
+
+                MiniProgressRing()
+
+                // Dim overlay + play glyph ONLY while paused (Metrolist cover).
+                Circle()
+                    .fill(Color.black.opacity(0.4))
+                    .frame(width: 36, height: 36)
+                    .opacity(player.isPlaying ? 0 : 1)
+                Image(systemName: "play.fill")
+                    .font(.system(size: 12, weight: .black))
+                    .foregroundStyle(.white)
+                    .opacity(player.isPlaying ? 0 : 1)
+            }
+            .frame(width: 42, height: 42)
+            .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        // Never inherit the swipe's settle spring (opacity must snap, not glide).
+        .transaction { $0.animation = nil }
+    }
+}
+
+// Title / artist / error — observes only `errorMessage`.
+struct MiniTrackInfo: View {
+    let track: Track
+    @Environment(PlayerState.self) private var player
+    @Environment(ThemeState.self) private var theme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(track.title)
+                .font(.system(size: 13.5, weight: .semibold))
+                .foregroundStyle(theme.ink)
+                .lineLimit(1)
+            if let err = player.errorMessage {
+                Text(err)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.red)
+                    .lineLimit(1)
+            } else {
+                HStack(spacing: 4) {
+                    if track.explicit {
+                        Image(systemName: "e.square.fill")
+                            .font(.system(size: 9))
+                            .foregroundStyle(theme.ink3)
+                    }
+                    Text(track.artist)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(theme.ink3)
+                        .lineLimit(1)
+                }
+            }
+        }
+    }
+}
+
+// Add to playlist — owns nothing; routes through the central sheet in ContentView.
+struct MiniAddToPlaylistButton: View {
+    let track: Track
+    @Environment(PlayerState.self) private var player
+    @Environment(ThemeState.self) private var theme
+
+    var body: some View {
+        Button {
+            player.presentAddToPlaylist(for: track)
+        } label: {
+            Image(systemName: "text.badge.plus")
+                .font(.system(size: 14))
+                .foregroundStyle(theme.ink2)
+                .frame(width: 34, height: 34)
+                .background(theme.palette.bg, in: Circle())
+                .overlay(Circle().strokeBorder(theme.line, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// Like — observes only this track's liked state.
+struct MiniLikeButton: View {
+    let track: Track
+    @Environment(PlayerState.self) private var player
+    @Environment(ThemeState.self) private var theme
+
+    private var isLiked: Bool { player.isLiked(track: track) }
+
+    var body: some View {
+        Button {
+            player.toggleLike(track: track)
+        } label: {
+            Image(systemName: isLiked ? "heart.fill" : "heart")
+                .font(.system(size: 14))
+                .foregroundStyle(isLiked ? theme.accent : theme.ink2)
+                .frame(width: 34, height: 34)
+                .background(theme.palette.bg, in: Circle())
+                .overlay(Circle().strokeBorder(theme.line, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        // Safe: scoped to isLiked, can't be inherited by the swipe transaction.
+        .animation(.spring(duration: 0.2), value: isLiked)
+    }
+}
+
 // MARK: - Mini player (pill above tab bar)
+// The parent knows the current track and essentially nothing else about playback
+// — all playback / like reads live in the isolated buttons above. So the pill's
+// body re-runs only on track change and on its own drag offset during a swipe.
 struct MiniPlayerView: View {
     let track: Track
-    var playing: Bool
-    var isLoading: Bool = false
-    var errorMessage: String? = nil
-    var liked: Bool = false
-    var onTap: () -> Void
-    var onToggle: () -> Void
-    var onLike: (() -> Void)? = nil
-    var onAddToPlaylist: (() -> Void)? = nil
-    var onPrevious: (() -> Void)? = nil
+    var onTap: (() -> Void)? = nil
     var onNext: (() -> Void)? = nil
+    var onPrevious: (() -> Void)? = nil
 
     @Environment(ThemeState.self) private var theme
-    @State private var swipeHapticTrigger = 0
+
     @State private var dragOffset: CGFloat = 0
+    @State private var settleAnim: Animation? = nil   // nil while dragging (1:1), spring on release
+    @State private var swipeHapticTrigger = 0
     @State private var thresholdCrossed = false
+    @State private var dragAxis: Axis? = nil
 
     private let swipeThreshold: CGFloat = 55
 
     var body: some View {
-        Button(action: onTap) {
+        Button(action: { onTap?() }) {
             HStack(spacing: 12) {
-                // Circular album art with progress arc + play/pause overlay
-                ZStack {
-                    ThumbnailView(url: track.thumbnailURL, seed: track.seed, cornerRadius: 999)
-                        .frame(width: 36, height: 36)
+                MiniPlayPauseButton(track: track)
 
-                    // Progress arc ring — isolated leaf so the per-tick progress
-                    // read doesn't re-render this whole pill.
-                    MiniProgressRing()
+                MiniTrackInfo(track: track)
 
-                    if errorMessage != nil {
-                        Image(systemName: "exclamationmark")
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundStyle(.red)
-                            .frame(width: 22, height: 22)
-                            .background(theme.palette.bg.opacity(0.95), in: Circle())
-                    } else {
-                        Button(action: { onToggle() }) {
-                            Group {
-                                if isLoading {
-                                    ProgressView()
-                                        .controlSize(.mini)
-                                        .tint(theme.ink)
-                                } else {
-                                    Image(systemName: playing ? "pause.fill" : "play.fill")
-                                        .font(.system(size: 9, weight: .black))
-                                        .foregroundStyle(theme.ink)
-                                        .contentTransition(.symbolEffect(.replace))
-                                }
-                            }
-                            .frame(width: 22, height: 22)
-                            .background(theme.palette.bg.opacity(0.95), in: Circle())
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(isLoading)
-                    }
-                }
-                .frame(width: 42, height: 42)
+                Spacer(minLength: 0)
 
-                // Track info
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(track.title)
-                        .font(.system(size: 13.5, weight: .semibold))
-                        .foregroundStyle(theme.ink)
-                        .lineLimit(1)
-                    if let err = errorMessage {
-                        Text(err)
-                            .font(.system(size: 11))
-                            .foregroundStyle(.red)
-                            .lineLimit(1)
-                    } else {
-                        HStack(spacing: 4) {
-                            if track.explicit {
-                                Image(systemName: "e.square.fill")
-                                    .font(.system(size: 9))
-                                    .foregroundStyle(theme.ink3)
-                            }
-                            Text(track.artist)
-                                .font(.system(size: 11.5))
-                                .foregroundStyle(theme.ink3)
-                                .lineLimit(1)
-                        }
-                    }
-                }
-
-                Spacer()
-
-                // Action buttons
-                HStack(spacing: 6) {
-                    miniActionBtn(icon: "text.badge.plus", action: onAddToPlaylist)
-                    Button {
-                        Haptics.likeToggled()
-                        onLike?()
-                    } label: {
-                        Image(systemName: liked ? "heart.fill" : "heart")
-                            .font(.system(size: 14))
-                            .foregroundStyle(liked ? theme.accent : theme.ink2)
-                            .frame(width: 34, height: 34)
-                            .background(theme.palette.bg, in: Circle())
-                            .overlay(Circle().strokeBorder(theme.line, lineWidth: 1))
-                    }
-                    .buttonStyle(.plain)
-                    .animation(.spring(duration: 0.2), value: liked)
-                }
+                MiniAddToPlaylistButton(track: track)
+                MiniLikeButton(track: track)
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
@@ -314,63 +359,48 @@ struct MiniPlayerView: View {
                     .overlay(Capsule().strokeBorder(theme.line, lineWidth: 1))
                     .shadow(color: theme.ink.opacity(0.06), radius: 10, y: 4)
             }
-            // Flatten the pill's geometry so the album art, play/pause button and
-            // action buttons all move as ONE rigid unit when the drag offset (or
-            // its snap-back spring) is applied. Without this, each child resolves
-            // its position independently and they desync.
+            // Flatten geometry so art, info and buttons move as ONE rigid unit
+            // under the drag offset / snap-back spring.
             .geometryGroup()
         }
         .buttonStyle(.plain)
         .offset(x: dragOffset)
-        .highPriorityGesture(
-            DragGesture(minimumDistance: 18)
-                .onChanged { value in
-                    guard !isLoading,
-                          abs(value.translation.width) > abs(value.translation.height) else { return }
-
-                    dragOffset = value.translation.width
-
-                    // Fire haptic once when threshold is first crossed
-                    if !thresholdCrossed && abs(value.translation.width) > swipeThreshold {
-                        thresholdCrossed = true
-                        swipeHapticTrigger += 1
-                    }
-                }
-                .onEnded { value in
-                    guard !isLoading,
-                          abs(value.translation.width) > abs(value.translation.height) else {
-                        withAnimation(.interpolatingSpring(stiffness: 130, damping: 10)) { dragOffset = 0 }
-                        thresholdCrossed = false
-                        return
-                    }
-
-                    let goingNext = value.translation.width < 0
-
-                    if abs(value.translation.width) > swipeThreshold {
-                        if goingNext { onNext?() } else { onPrevious?() }
-                    }
-                    // Always snap back with rubber bounce
-                    withAnimation(.interpolatingSpring(stiffness: 130, damping: 10)) {
-                        dragOffset = 0
-                    }
-                    thresholdCrossed = false
-                }
-        )
+        // Scoped to dragOffset: nil during the drag (1:1), spring on release.
+        .animation(settleAnim, value: dragOffset)
+        .highPriorityGesture(swipeGesture)
         .sensoryFeedback(.impact(flexibility: .rigid, intensity: 0.7), trigger: swipeHapticTrigger)
         .padding(.horizontal, 12)
         .padding(.bottom, 8)
     }
 
-    private func miniActionBtn(icon: String, action: (() -> Void)?) -> some View {
-        Button { action?() } label: {
-            Image(systemName: icon)
-                .font(.system(size: 14))
-                .foregroundStyle(theme.ink2)
-                .frame(width: 34, height: 34)
-                .background(theme.palette.bg, in: Circle())
-                .overlay(Circle().strokeBorder(theme.line, lineWidth: 1))
-        }
-        .buttonStyle(.plain)
+    private var swipeGesture: some Gesture {
+        DragGesture(minimumDistance: 18)
+            .onChanged { value in
+                // Latch the axis on the first frame; only horizontal drags move
+                // the pill. Reset settle → drag tracks the finger 1:1.
+                if dragAxis == nil {
+                    dragAxis = abs(value.translation.width) > abs(value.translation.height) ? .horizontal : .vertical
+                    if dragAxis == .horizontal { settleAnim = nil }
+                }
+                guard dragAxis == .horizontal else { return }
+
+                dragOffset = value.translation.width
+
+                if !thresholdCrossed && abs(value.translation.width) > swipeThreshold {
+                    thresholdCrossed = true
+                    swipeHapticTrigger += 1
+                }
+            }
+            .onEnded { value in
+                defer { dragAxis = nil; thresholdCrossed = false }
+                let wasHorizontal = dragAxis == .horizontal
+                // Bouncy snap-back (original_C's spring), applied via settleAnim.
+                settleAnim = .interpolatingSpring(stiffness: 130, damping: 10)
+                if wasHorizontal, abs(value.translation.width) > swipeThreshold {
+                    if value.translation.width < 0 { onNext?() } else { onPrevious?() }
+                }
+                dragOffset = 0
+            }
     }
 }
 

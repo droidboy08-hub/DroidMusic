@@ -9,13 +9,16 @@ struct ThumbnailView: View {
     /// main artwork sets this — everywhere else the image is decoded to the
     /// size it's actually shown at.
     var fullResolution: Bool = false
+    /// Keep the previous cover visible while a new URL loads (mini player swipe).
+    var holdWhileLoading: Bool = false
 
     var body: some View {
         GeometryReader { geometry in
             Group {
                 if let urlStr = url, let imageURL = URL(string: urlStr) {
                     CachedAsyncImage(url: imageURL,
-                                     targetSize: fullResolution ? nil : geometry.size) { image in
+                                     targetSize: fullResolution ? nil : geometry.size,
+                                     holdWhileLoading: holdWhileLoading) { image in
                         image
                             .resizable()
                             .scaledToFill()

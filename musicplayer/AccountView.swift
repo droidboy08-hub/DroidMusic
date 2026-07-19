@@ -12,10 +12,26 @@ struct AccountView: View {
     @State private var isSignedIn = false
     @State private var showTokenAlert = false
     @State private var sessionToken = "No active session"
+    @State private var contentVisible = false   // content fades in after the window scales
 
     var body: some View {
         panel
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        // The box (below) is always drawn so the springy scale animates a solid
+        // empty shape; the content fades in as the window nears full size, and
+        // hides instantly on close.
+        .onChange(of: player.showAccount) { _, show in
+            if show {
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 160_000_000)
+                    if player.showAccount {
+                        withAnimation(.easeOut(duration: 0.2)) { contentVisible = true }
+                    }
+                }
+            } else {
+                contentVisible = false
+            }
+        }
         .fullScreenCover(isPresented: $showSettings) {
             SettingsView()
                 .environment(theme)
@@ -47,11 +63,16 @@ struct AccountView: View {
         }
         .padding(22)
         .frame(width: 360)
-        .background(theme.palette.bg)
-        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous)
-            .strokeBorder(theme.line, lineWidth: 1))
-        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .shadow(color: theme.ink.opacity(0.30), radius: 40, y: 12)
+        // Content is gated on `contentVisible` — it's laid out (so the box gets the
+        // right size) but invisible while the window scales, then fades in.
+        .opacity(contentVisible ? 1 : 0)
+        .background {
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .fill(theme.palette.bg)
+                .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .strokeBorder(theme.line, lineWidth: 1))
+                .shadow(color: theme.ink.opacity(0.30), radius: 40, y: 12)
+        }
     }
 
     private var sheetHeader: some View {
