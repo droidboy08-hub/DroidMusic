@@ -33,7 +33,7 @@ enum PersistenceKey: String {
     case wifiOnly
     case animations
     case lyrics
-    case adaptiveMiniPlayer
+    case newMiniPlayer
 }
 
 // MARK: - Codable-backed UserDefaults facade

@@ -58,10 +58,10 @@ final class SettingsState {
         didSet { PersistenceStore.save(lyrics, for: .lyrics) }
     }
 
-    // Adaptive (isolated-buttons) mini player — experimental. Toggle only for
-    // now; not wired to any behavior yet.
-    var adaptiveMiniPlayer: Bool = true {
-        didSet { PersistenceStore.save(adaptiveMiniPlayer, for: .adaptiveMiniPlayer) }
+    // Switches the mini player between the classic pill (off, default) and the
+    // redesigned NewMiniPlayerView (on).
+    var newMiniPlayer: Bool = false {
+        didSet { PersistenceStore.save(newMiniPlayer, for: .newMiniPlayer) }
     }
 
     init() {
@@ -80,6 +80,6 @@ final class SettingsState {
         if appTheme == "Black" { appTheme = "System" }   // migrate old saved value
         if let v = PersistenceStore.load(.animations, as: Bool.self) { animations = v }
         if let v = PersistenceStore.load(.lyrics, as: Bool.self) { lyrics = v }
-        if let v = PersistenceStore.load(.adaptiveMiniPlayer, as: Bool.self) { adaptiveMiniPlayer = v }
+        if let v = PersistenceStore.load(.newMiniPlayer, as: Bool.self) { newMiniPlayer = v }
     }
 }

@@ -39,18 +39,25 @@ struct ContentView: View {
         .overlay(alignment: .bottom) {
             VStack(spacing: 0) {
                 if theme.showMiniPlayer, let track = player.currentTrack {
-                    MiniPlayerView(
-                        track: track,
-                        onTap: { player.showNowPlaying = true },
-                        onNext: {
-                            guard player.canPlayNextTrack else { return }
-                            player.playNextTrack()
-                        },
-                        onPrevious: {
-                            guard player.canPlayPreviousTrack else { return }
-                            player.playPreviousTrack()
-                        }
-                    )
+                    if settings.newMiniPlayer {
+                        NewMiniPlayerView(
+                            track: track,
+                            onTap: { player.showNowPlaying = true }
+                        )
+                    } else {
+                        MiniPlayerView(
+                            track: track,
+                            onTap: { player.showNowPlaying = true },
+                            onNext: {
+                                guard player.canPlayNextTrack else { return }
+                                player.playNextTrack()
+                            },
+                            onPrevious: {
+                                guard player.canPlayPreviousTrack else { return }
+                                player.playPreviousTrack()
+                            }
+                        )
+                    }
                 }
                 TabBarView(selected: $selectedTab)
             }

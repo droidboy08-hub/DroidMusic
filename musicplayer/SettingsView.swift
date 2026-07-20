@@ -128,7 +128,7 @@ struct SettingsView: View {
             displayFontRow
             tabIndicatorRow
             miniPlayerRow
-            adaptiveMiniPlayerRow
+            newMiniPlayerRow
         }
     }
 
@@ -288,11 +288,11 @@ struct SettingsView: View {
         )
     }
 
-    private var adaptiveMiniPlayerRow: some View {
+    private var newMiniPlayerRow: some View {
         SettingToggleRow(
-            label: "Adaptive mini player",
-            sub: "Experimental",
-            value: Bindable(settings).adaptiveMiniPlayer,
+            label: "New mini player",
+            sub: "Redesigned pill with swipe-to-change",
+            value: Bindable(settings).newMiniPlayer,
             isLast: true
         )
     }
