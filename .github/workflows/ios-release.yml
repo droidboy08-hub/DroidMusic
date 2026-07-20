@@ -1,0 +1,136 @@
+name: iOS Release (Unsigned IPA)
+
+# Builds an UNSIGNED .ipa on a macOS runner and publishes it as a GitHub Release asset.
+# There are no Apple signing certificates in CI, so the IPA is not code-signed — install it
+# by sideloading (AltStore / Sideloadly / TrollStore), which re-signs the app on-device.
+#
+# Triggers:
+#   * Pushing a tag like v1.0.0                    -> builds and creates/updates that release.
+#   * Pushing the release branch below             -> builds and creates/updates the RELEASE_VERSION release.
+#   * Manual "Run workflow" (once on default branch)-> builds and creates/updates the given release.
+
+on:
+  push:
+    tags:
+      - 'v*'
+    branches:
+      - 'claude/asset-release-ipa-build-7a5iqh'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release tag to publish (e.g. v1.0.0)'
+        required: true
+        default: 'v1.0.0'
+
+env:
+  # Release tag used for branch-push builds (git tags can't be pushed from this
+  # environment, so the workflow creates the tag + release itself via GITHUB_TOKEN).
+  RELEASE_VERSION: v1.0.0
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ios-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve release tag
+        id: ver
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.version }}"
+          elif [ "${GITHUB_REF}" != "${GITHUB_REF#refs/tags/}" ]; then
+            TAG="${GITHUB_REF_NAME}"          # tag push -> use the tag name
+          else
+            TAG="${RELEASE_VERSION}"          # branch push -> use configured version
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Release tag: ${TAG}"
+
+      - name: Select latest Xcode
+        run: |
+          set -euo pipefail
+          LATEST="$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -1 || true)"
+          if [ -n "${LATEST}" ]; then
+            echo "Using ${LATEST}"
+            sudo xcode-select -s "${LATEST}/Contents/Developer"
+          fi
+          xcodebuild -version
+          echo "Available iOS SDKs:"
+          xcodebuild -showsdks | grep -i iphoneos || true
+
+      - name: Build unsigned archive
+        run: |
+          set -euo pipefail
+          xcodebuild clean archive \
+            -project musicplayer.xcodeproj \
+            -scheme musicplayer \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "${RUNNER_TEMP}/musicplayer.xcarchive" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_ENTITLEMENTS="" \
+            DEVELOPMENT_TEAM=""
+
+      - name: Package unsigned IPA
+        id: pkg
+        run: |
+          set -euo pipefail
+          APP_PATH="$(ls -d "${RUNNER_TEMP}/musicplayer.xcarchive/Products/Applications/"*.app | head -1)"
+          echo "Archived app: ${APP_PATH}"
+          WORK="${RUNNER_TEMP}/ipa-staging"
+          rm -rf "${WORK}"
+          mkdir -p "${WORK}/Payload"
+          cp -R "${APP_PATH}" "${WORK}/Payload/"
+          IPA="${RUNNER_TEMP}/DroidMusic-${{ steps.ver.outputs.tag }}-unsigned.ipa"
+          (cd "${WORK}" && zip -qry "${IPA}" Payload)
+          echo "ipa=${IPA}" >> "$GITHUB_OUTPUT"
+          ls -lh "${IPA}"
+
+      - name: Upload IPA as build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DroidMusic-unsigned-ipa
+          path: ${{ steps.pkg.outputs.ipa }}
+          if-no-files-found: error
+
+      - name: Create / update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.ver.outputs.tag }}"
+          IPA="${{ steps.pkg.outputs.ipa }}"
+          NOTES="$(cat <<'EOF'
+          Automated **unsigned** iOS build of DroidMusic.
+
+          This `.ipa` is **not code-signed** (no Apple certificates are available to CI).
+          Install it by sideloading with a tool that signs on-device:
+
+          - **AltStore** / **SideStore**
+          - **Sideloadly**
+          - **TrollStore** (for supported iOS versions)
+
+          Built from the tagged commit by the `iOS Release (Unsigned IPA)` workflow.
+          EOF
+          )"
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            echo "Release ${TAG} exists — uploading asset."
+            gh release upload "${TAG}" "${IPA}" --clobber
+          else
+            echo "Creating release ${TAG}."
+            gh release create "${TAG}" "${IPA}" \
+              --title "DroidMusic ${TAG}" \
+              --notes "${NOTES}" \
+              --target "${GITHUB_SHA}"
+          fi
